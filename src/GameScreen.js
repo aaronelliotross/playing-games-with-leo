@@ -24,6 +24,16 @@ const MIN_LINGER_MS = 350;
 const MAX_LINGER_MS = 1600;
 // A gap longer than this means you stopped and restarted, so cadence resets.
 const CADENCE_RESET_MS = 1600;
+// Stepping quicker than this (sustained) counts as running, not walking.
+const RUN_THRESHOLD_MS = 230;
+
+// Build tag, baked in at deploy time so you can tell which release is live.
+// (EXPO_PUBLIC_* vars are inlined by Expo at build; undefined in local dev.)
+const BUILD_NUMBER = process.env.EXPO_PUBLIC_BUILD_NUMBER;
+const BUILD_SHA = (process.env.EXPO_PUBLIC_BUILD_SHA || '').slice(0, 7);
+const BUILD_LABEL = BUILD_NUMBER
+  ? `build ${BUILD_NUMBER}${BUILD_SHA ? ' · ' + BUILD_SHA : ''}`
+  : 'dev build';
 
 // Default scenery used until a hike supplies its own clip.
 const DEFAULT_VIDEO = require('../assets/walk_trail.mp4');
@@ -37,6 +47,7 @@ function HikeSelector({ onSelect }) {
     <SafeAreaView style={styles.container}>
       <Text style={styles.title}>Choose a Hike</Text>
       <FlatList
+        style={styles.hikeList}
         data={HIKES}
         keyExtractor={(item) => item.id}
         ItemSeparatorComponent={() => <View style={styles.separator} />}
@@ -48,6 +59,7 @@ function HikeSelector({ onSelect }) {
           </TouchableOpacity>
         )}
       />
+      <Text style={styles.buildTag}>{BUILD_LABEL}</Text>
     </SafeAreaView>
   );
 }
@@ -77,6 +89,7 @@ function WalkingView({ hike, onBack }) {
   const [feedback, setFeedback] = useState('start walking');
   const [done, setDone] = useState(false);
   const [invalidFlash, setInvalidFlash] = useState(false);
+  const [running, setRunning] = useState(false);
 
   const nextFootRef = useRef('left');
   const stepsRef = useRef(0);
@@ -135,7 +148,7 @@ function WalkingView({ hike, onBack }) {
       : BASE_INTERVAL_MS;
     const rate = Math.max(MIN_RATE, Math.min(MAX_RATE, BASE_INTERVAL_MS / avg));
     const linger = Math.max(MIN_LINGER_MS, Math.min(MAX_LINGER_MS, avg * 1.7));
-    return { rate, linger };
+    return { rate, linger, avg, sampled: arr.length > 0 };
   }, []);
 
   const handleStep = useCallback(
@@ -148,9 +161,17 @@ function WalkingView({ hike, onBack }) {
 
         setSteps(newSteps);
         setNextFoot(newFoot);
-        setFeedback(side === 'left' ? 'left foot' : 'right foot');
-        const { rate, linger } = computePace();
+        const { rate, linger, avg, sampled } = computePace();
         keepWalking(rate, linger);
+
+        // Sustained fast cadence = running. This is a walking game.
+        const running = sampled && avg < RUN_THRESHOLD_MS;
+        setRunning(running);
+        if (running) {
+          setFeedback('no running!');
+        } else {
+          setFeedback(side === 'left' ? 'left foot' : 'right foot');
+        }
 
         if (newSteps >= hike.steps) {
           setDone(true);
@@ -158,6 +179,7 @@ function WalkingView({ hike, onBack }) {
       } else {
         if (invalidTimerRef.current) clearTimeout(invalidTimerRef.current);
         setInvalidFlash(true);
+        setRunning(false);
         setFeedback('same foot');
         invalidTimerRef.current = setTimeout(() => {
           setInvalidFlash(false);
@@ -216,6 +238,7 @@ function WalkingView({ hike, onBack }) {
           nextFootRef.current = 'left';
           lastStepAtRef.current = 0;
           intervalsRef.current = [];
+          setRunning(false);
           setSteps(0);
           setNextFoot('left');
           setFeedback('start walking');
@@ -264,8 +287,17 @@ function WalkingView({ hike, onBack }) {
           </View>
         </View>
 
-        <Text style={[styles.feedback, invalidFlash && styles.feedbackInvalid]}>{feedback}</Text>
+        <Text
+          style={[
+            styles.feedback,
+            invalidFlash && styles.feedbackInvalid,
+            running && styles.feedbackRunning,
+          ]}
+        >
+          {feedback}
+        </Text>
       </SafeAreaView>
+      <Text style={styles.buildTagOverlay}>{BUILD_LABEL}</Text>
     </View>
   );
 }
@@ -315,6 +347,15 @@ const styles = StyleSheet.create({
   hikeSteps: {
     fontSize: 12,
     color: '#999',
+  },
+  hikeList: {
+    flex: 1,
+  },
+  buildTag: {
+    fontSize: 11,
+    color: '#aaa',
+    textAlign: 'center',
+    paddingVertical: 10,
   },
 
   // Walking view (video background + overlay)
@@ -404,6 +445,20 @@ const styles = StyleSheet.create({
   },
   feedbackInvalid: {
     color: 'rgba(255,255,255,0.55)',
+  },
+  feedbackRunning: {
+    color: '#ffd24d',
+    fontWeight: '700',
+  },
+  buildTagOverlay: {
+    position: 'absolute',
+    right: 8,
+    bottom: 4,
+    fontSize: 10,
+    color: 'rgba(255,255,255,0.6)',
+    textShadowColor: 'rgba(0,0,0,0.6)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
 
   // Completion
