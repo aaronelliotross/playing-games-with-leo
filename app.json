@@ -20,9 +20,6 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "plugins": [
-      "expo-video"
-    ],
     "experiments": {
       "baseUrl": "/playing-games-with-leo"
     }

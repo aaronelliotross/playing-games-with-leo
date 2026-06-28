@@ -9,29 +9,22 @@ import {
   TouchableOpacity,
   SafeAreaView,
 } from 'react-native';
-import { useVideoPlayer, VideoView } from 'expo-video';
+import RouteMap from './RouteMap';
 import { HIKES } from './hikeData';
 
 const SWIPE_THRESHOLD = 40;
-// Cadence -> playback tuning. A step interval of BASE_INTERVAL_MS plays the
-// scenery at 1x; quicker steps speed it up, slower steps slow it down.
-const BASE_INTERVAL_MS = 500;
-const MIN_RATE = 0.5;
-const MAX_RATE = 3.0;
-// How long the scenery keeps moving after a step before it pauses. Scaled to
-// your pace so steady-but-slow walking keeps drifting instead of stuttering.
-const MIN_LINGER_MS = 350;
-const MAX_LINGER_MS = 1600;
-// A gap longer than this means you stopped and restarted, so cadence resets.
-const CADENCE_RESET_MS = 1600;
 // Running = a genuinely fast, sustained cadence: average step interval below
 // RUN_THRESHOLD_MS across at least RUN_MIN_SAMPLES steps. Tuned high so brisk
 // walking doesn't trip it.
 const RUN_THRESHOLD_MS = 175;
 const RUN_MIN_SAMPLES = 3;
+// A gap longer than this means you stopped and restarted, so cadence resets.
+const CADENCE_RESET_MS = 1600;
 // When running is detected, movement is blocked for a breather.
 const BREATHER_MS = 2000;
 const BREATHER_MSG_SWITCH_MS = 1000;
+// How quickly the pin eases toward its true position each frame (0..1).
+const PIN_EASE = 0.18;
 
 // Build tag, baked in at deploy time so you can tell which release is live.
 // (EXPO_PUBLIC_* vars are inlined by Expo at build; undefined in local dev.)
@@ -40,9 +33,6 @@ const BUILD_SHA = (process.env.EXPO_PUBLIC_BUILD_SHA || '').slice(0, 7);
 const BUILD_LABEL = BUILD_NUMBER
   ? `build ${BUILD_NUMBER}${BUILD_SHA ? ' · ' + BUILD_SHA : ''}`
   : 'dev build';
-
-// Default scenery used until a hike supplies its own clip.
-const DEFAULT_VIDEO = require('../assets/walk_trail.mp4');
 
 function formatSteps(n) {
   return n.toLocaleString();
@@ -96,48 +86,45 @@ function WalkingView({ hike, onBack }) {
   const [done, setDone] = useState(false);
   const [invalidFlash, setInvalidFlash] = useState(false);
   const [blocked, setBlocked] = useState(false);
+  // Eased pin position (0..1) that follows the true step progress smoothly.
+  const [displayed, setDisplayed] = useState(0);
 
   const nextFootRef = useRef('left');
   const stepsRef = useRef(0);
   const invalidTimerRef = useRef(null);
-  const lingerTimerRef = useRef(null);
   // Cadence tracking: timestamp of the last step + recent step intervals.
   const lastStepAtRef = useRef(0);
   const intervalsRef = useRef([]);
-  // Breather: while blocked, steps are ignored and the scenery is held still.
+  // Breather: while blocked, steps are ignored and the pin holds still.
   const blockedRef = useRef(false);
   const breatherTimerRef = useRef(null);
   const breatherMsgTimerRef = useRef(null);
+  // Pin easing.
+  const displayedRef = useRef(0);
 
-  // Scenery: stays paused until a step nudges it, then drifts back to a stop.
-  const videoSource = hike.video || DEFAULT_VIDEO;
-  const player = useVideoPlayer(videoSource, (p) => {
-    p.loop = true;
-    p.muted = true;
-  });
-  const playerRef = useRef(player);
-  playerRef.current = player;
+  // Smoothly ease the pin toward its true progress; only re-renders while moving.
+  useEffect(() => {
+    let raf;
+    let mounted = true;
+    const tick = () => {
+      const target = Math.min(1, stepsRef.current / hike.steps);
+      const cur = displayedRef.current;
+      let next = cur + (target - cur) * PIN_EASE;
+      if (Math.abs(target - next) < 1e-4) next = target;
+      if (next !== cur) {
+        displayedRef.current = next;
+        setDisplayed(next);
+      }
+      if (mounted) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => {
+      mounted = false;
+      cancelAnimationFrame(raf);
+    };
+  }, [hike.steps]);
 
-  // Drive the scenery for one step: set its speed to your pace, play, and
-  // schedule a pause once you stop (with cadence reset so the next start is fresh).
-  const keepWalking = useCallback((rate, linger) => {
-    const p = playerRef.current;
-    if (!p) return;
-    try {
-      p.playbackRate = rate;
-      p.play();
-    } catch (e) {}
-    if (lingerTimerRef.current) clearTimeout(lingerTimerRef.current);
-    lingerTimerRef.current = setTimeout(() => {
-      try {
-        playerRef.current && playerRef.current.pause();
-      } catch (e) {}
-      // Cadence is not reset here: the long-gap check in computePace() handles
-      // a genuine stop, while keeping slow-but-steady walking from resetting.
-    }, linger);
-  }, []);
-
-  // Average step interval -> a playback rate and a linger window.
+  // Track step cadence; returns the recent average interval and sample count.
   const computePace = useCallback(() => {
     const now = Date.now();
     const last = lastStepAtRef.current;
@@ -153,23 +140,14 @@ function WalkingView({ hike, onBack }) {
       }
     }
     const arr = intervalsRef.current;
-    const avg = arr.length
-      ? arr.reduce((a, b) => a + b, 0) / arr.length
-      : BASE_INTERVAL_MS;
-    const rate = Math.max(MIN_RATE, Math.min(MAX_RATE, BASE_INTERVAL_MS / avg));
-    const linger = Math.max(MIN_LINGER_MS, Math.min(MAX_LINGER_MS, avg * 1.7));
-    return { rate, linger, avg, samples: arr.length };
+    const avg = arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : Infinity;
+    return { avg, samples: arr.length };
   }, []);
 
   // Block movement for a couple seconds and tell them to slow down.
   const startBreather = useCallback(() => {
     blockedRef.current = true;
     setBlocked(true);
-    // Hold the scenery still for the breather.
-    if (lingerTimerRef.current) clearTimeout(lingerTimerRef.current);
-    try {
-      playerRef.current && playerRef.current.pause();
-    } catch (e) {}
     setFeedback('No running!');
     if (breatherMsgTimerRef.current) clearTimeout(breatherMsgTimerRef.current);
     breatherMsgTimerRef.current = setTimeout(
@@ -192,10 +170,9 @@ function WalkingView({ hike, onBack }) {
       if (blockedRef.current) return;
 
       if (side === nextFootRef.current) {
-        const { rate, linger, avg, samples } = computePace();
+        const { avg, samples } = computePace();
 
-        // Sustained fast cadence = running. This is a walking game: don't count
-        // the step, just freeze and make them slow down.
+        // Sustained fast cadence = running. Don't count the step; freeze instead.
         if (samples >= RUN_MIN_SAMPLES && avg < RUN_THRESHOLD_MS) {
           startBreather();
           return;
@@ -208,7 +185,6 @@ function WalkingView({ hike, onBack }) {
 
         setSteps(newSteps);
         setNextFoot(newFoot);
-        keepWalking(rate, linger);
         setFeedback(side === 'left' ? 'left foot' : 'right foot');
 
         if (newSteps >= hike.steps) {
@@ -224,14 +200,13 @@ function WalkingView({ hike, onBack }) {
         }, 600);
       }
     },
-    [hike.steps, keepWalking, computePace, startBreather]
+    [hike.steps, computePace, startBreather]
   );
 
-  // Tidy up timers and stop the scenery when leaving the walk.
+  // Tidy up timers when leaving the walk.
   useEffect(() => {
     return () => {
       if (invalidTimerRef.current) clearTimeout(invalidTimerRef.current);
-      if (lingerTimerRef.current) clearTimeout(lingerTimerRef.current);
       if (breatherTimerRef.current) clearTimeout(breatherTimerRef.current);
       if (breatherMsgTimerRef.current) clearTimeout(breatherMsgTimerRef.current);
     };
@@ -278,9 +253,11 @@ function WalkingView({ hike, onBack }) {
           lastStepAtRef.current = 0;
           intervalsRef.current = [];
           blockedRef.current = false;
+          displayedRef.current = 0;
           if (breatherTimerRef.current) clearTimeout(breatherTimerRef.current);
           if (breatherMsgTimerRef.current) clearTimeout(breatherMsgTimerRef.current);
           setBlocked(false);
+          setDisplayed(0);
           setSteps(0);
           setNextFoot('left');
           setFeedback('start walking');
@@ -293,13 +270,7 @@ function WalkingView({ hike, onBack }) {
 
   return (
     <View style={styles.walkingRoot}>
-      <VideoView
-        style={StyleSheet.absoluteFill}
-        player={player}
-        contentFit="cover"
-        nativeControls={false}
-        pointerEvents="none"
-      />
+      <RouteMap hike={hike} progress={displayed} />
 
       <SafeAreaView style={styles.walkingOverlay} {...panResponder.panHandlers}>
         <View style={styles.topPanel}>
@@ -316,28 +287,27 @@ function WalkingView({ hike, onBack }) {
           </View>
         </View>
 
-        <View style={styles.footZones} pointerEvents="none">
-          <View style={[styles.footZone, nextFoot === 'left' && styles.footZoneActive]}>
+        <View style={styles.spacer} pointerEvents="none" />
+
+        <View style={styles.bottomBar} pointerEvents="none">
+          <View style={styles.footRow}>
             <Text style={[styles.footZoneText, nextFoot === 'left' && styles.footZoneTextActive]}>
               LEFT
             </Text>
-          </View>
-          <View style={[styles.footZone, nextFoot === 'right' && styles.footZoneActive]}>
             <Text style={[styles.footZoneText, nextFoot === 'right' && styles.footZoneTextActive]}>
               RIGHT
             </Text>
           </View>
+          <Text
+            style={[
+              styles.feedback,
+              invalidFlash && styles.feedbackInvalid,
+              blocked && styles.feedbackRunning,
+            ]}
+          >
+            {feedback}
+          </Text>
         </View>
-
-        <Text
-          style={[
-            styles.feedback,
-            invalidFlash && styles.feedbackInvalid,
-            blocked && styles.feedbackRunning,
-          ]}
-        >
-          {feedback}
-        </Text>
       </SafeAreaView>
 
       {blocked && (
@@ -407,17 +377,17 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
 
-  // Walking view (video background + overlay)
+  // Walking view (map background + overlay)
   walkingRoot: {
     flex: 1,
-    backgroundColor: '#2b2b2b',
+    backgroundColor: '#e9e7df',
   },
   walkingOverlay: {
     flex: 1,
     justifyContent: 'space-between',
   },
   topPanel: {
-    backgroundColor: 'rgba(245,245,240,0.86)',
+    backgroundColor: 'rgba(245,245,240,0.9)',
     paddingHorizontal: 20,
     paddingTop: 14,
     paddingBottom: 16,
@@ -458,45 +428,43 @@ const styles = StyleSheet.create({
     borderRadius: 3,
   },
 
-  footZones: {
+  spacer: {
     flex: 1,
+  },
+  bottomBar: {
+    backgroundColor: 'rgba(245,245,240,0.9)',
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(0,0,0,0.12)',
+    paddingTop: 14,
+    paddingBottom: 18,
+    paddingHorizontal: 36,
+  },
+  footRow: {
     flexDirection: 'row',
-  },
-  footZone: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  footZoneActive: {
-    backgroundColor: 'rgba(255,255,255,0.16)',
+    justifyContent: 'space-between',
+    marginBottom: 10,
   },
   footZoneText: {
     fontSize: 13,
     letterSpacing: 2,
-    color: 'rgba(255,255,255,0.45)',
+    color: 'rgba(0,0,0,0.3)',
     fontWeight: '600',
-    textShadowColor: 'rgba(0,0,0,0.5)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
   },
   footZoneTextActive: {
-    color: 'rgba(255,255,255,0.95)',
+    color: '#1a1a1a',
   },
   feedback: {
     textAlign: 'center',
     fontSize: 15,
-    color: '#fff',
-    paddingBottom: 24,
+    color: '#333',
     letterSpacing: 1,
-    textShadowColor: 'rgba(0,0,0,0.6)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 3,
+    fontWeight: '600',
   },
   feedbackInvalid: {
-    color: 'rgba(255,255,255,0.55)',
+    color: '#999',
   },
   feedbackRunning: {
-    color: '#ffd24d',
+    color: '#b8860b',
     fontWeight: '700',
   },
   breatherOverlay: {
@@ -516,10 +484,7 @@ const styles = StyleSheet.create({
     right: 8,
     bottom: 4,
     fontSize: 10,
-    color: 'rgba(255,255,255,0.6)',
-    textShadowColor: 'rgba(0,0,0,0.6)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
+    color: 'rgba(0,0,0,0.45)',
   },
 
   // Completion
