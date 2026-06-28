@@ -17,6 +17,7 @@ import {
   makeRiver,
   wobblyRing,
 } from './routeGeometry';
+import { AT_SHAPE } from './atShape';
 
 const seededRand = (seed) => {
   let s = seed % 2147483647;
@@ -72,10 +73,11 @@ function skyState(steps) {
   };
 }
 
-// Whole-route overview inset size.
-const OVERVIEW_W = 116;
-const OVERVIEW_H = 84;
+// Whole-route overview inset size (portrait for the tall AT shape).
 const OVERVIEW_PAD = 10;
+function overviewSize(kind) {
+  return kind === 'appalachian' ? { w: 88, h: 128 } : { w: 116, h: 84 };
+}
 
 const BUILDING_SHADES = ['#9aa6b2', '#8e99a6', '#a8a594', '#b3a892', '#9fa894', '#8f9bb0'];
 
@@ -249,26 +251,24 @@ function buildScenery(theme, loop, seed) {
 
 // Whole-journey minimap with the pin at the true overall fraction.
 function Overview({ built, progress, theme }) {
+  const { w: OW, h: OH } = overviewSize(theme.kind);
   const b = useMemo(() => bounds(built.points), [built]);
   const spanX = b.maxX - b.minX || 1;
   const spanY = b.maxY - b.minY || 1;
-  const scale = Math.min(
-    (OVERVIEW_W - 2 * OVERVIEW_PAD) / spanX,
-    (OVERVIEW_H - 2 * OVERVIEW_PAD) / spanY
-  );
-  const offX = (OVERVIEW_W - spanX * scale) / 2 - b.minX * scale;
-  const offY = (OVERVIEW_H - spanY * scale) / 2 - b.minY * scale;
+  const scale = Math.min((OW - 2 * OVERVIEW_PAD) / spanX, (OH - 2 * OVERVIEW_PAD) / spanY);
+  const offX = (OW - spanX * scale) / 2 - b.minX * scale;
+  const offY = (OH - spanY * scale) / 2 - b.minY * scale;
 
   const all = useMemo(() => toPolyline(built.points, scale, offX, offY), [built, scale, offX, offY]);
   const traveled = toPolyline(sliceTo(built, progress), scale, offX, offY);
   const pin = pointAt(built, progress);
 
   return (
-    <View style={[styles.overview, { backgroundColor: theme.bg }]}>
-      <Svg width={OVERVIEW_W} height={OVERVIEW_H}>
-        <Polyline points={all} fill="none" stroke={theme.route} strokeWidth={2} strokeLinejoin="round" />
-        <Polyline points={traveled} fill="none" stroke={theme.traveled} strokeWidth={2} strokeLinejoin="round" />
-        <Circle cx={offX + pin.x * scale} cy={offY + pin.y * scale} r={3.2} fill={theme.pin} stroke="#fff" strokeWidth={1} />
+    <View style={[styles.overview, { width: OW + 8, height: OH + 8 }]}>
+      <Svg width={OW} height={OH}>
+        <Polyline points={all} fill="none" stroke="#8d8a80" strokeWidth={1.6} strokeLinejoin="round" strokeLinecap="round" />
+        <Polyline points={traveled} fill="none" stroke={theme.traveled} strokeWidth={2.4} strokeLinejoin="round" strokeLinecap="round" />
+        <Circle cx={offX + pin.x * scale} cy={offY + pin.y * scale} r={3.4} fill={theme.pin} stroke="#fff" strokeWidth={1.2} />
       </Svg>
     </View>
   );
@@ -286,10 +286,11 @@ export default function RouteMap({ hike, steps }) {
     [hike.id]
   );
   // Whole-journey route drives the overview inset (true overall progress).
-  const journey = useMemo(
-    () => buildPath(theme.kind === 'city' ? makeCityRoute(seed) : makeRoute(seed)),
-    [hike.id]
-  );
+  // The Appalachian Trail uses its real centerline shape.
+  const journey = useMemo(() => {
+    if (theme.kind === 'appalachian') return buildPath(AT_SHAPE.map((p) => ({ ...p })));
+    return buildPath(theme.kind === 'city' ? makeCityRoute(seed) : makeRoute(seed));
+  }, [hike.id]);
 
   const stars = useMemo(() => (theme.stars ? makeStars(seed) : []), [hike.id, theme.stars]);
   const skyStars = useMemo(() => (theme.dayNight ? makeStars(seed, 70) : []), [hike.id, theme.dayNight]);
@@ -375,12 +376,12 @@ const styles = StyleSheet.create({
   },
   overview: {
     position: 'absolute',
-    top: 12,
+    bottom: 96,
     right: 12,
     padding: 4,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.15)',
-    opacity: 0.95,
+    borderColor: 'rgba(0,0,0,0.18)',
+    backgroundColor: 'rgba(248,247,242,0.92)',
   },
 });
