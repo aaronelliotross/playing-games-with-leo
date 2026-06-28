@@ -13,8 +13,17 @@ import { useVideoPlayer, VideoView } from 'expo-video';
 import { HIKES } from './hikeData';
 
 const SWIPE_THRESHOLD = 40;
-// How long the scenery keeps moving after a step before it pauses again.
-const WALK_LINGER_MS = 480;
+// Cadence -> playback tuning. A step interval of BASE_INTERVAL_MS plays the
+// scenery at 1x; quicker steps speed it up, slower steps slow it down.
+const BASE_INTERVAL_MS = 500;
+const MIN_RATE = 0.5;
+const MAX_RATE = 3.0;
+// How long the scenery keeps moving after a step before it pauses. Scaled to
+// your pace so steady-but-slow walking keeps drifting instead of stuttering.
+const MIN_LINGER_MS = 350;
+const MAX_LINGER_MS = 1600;
+// A gap longer than this means you stopped and restarted, so cadence resets.
+const CADENCE_RESET_MS = 1600;
 
 // Default scenery used until a hike supplies its own clip.
 const DEFAULT_VIDEO = require('../assets/walk_trail.mp4');
@@ -73,6 +82,9 @@ function WalkingView({ hike, onBack }) {
   const stepsRef = useRef(0);
   const invalidTimerRef = useRef(null);
   const lingerTimerRef = useRef(null);
+  // Cadence tracking: timestamp of the last step + recent step intervals.
+  const lastStepAtRef = useRef(0);
+  const intervalsRef = useRef([]);
 
   // Scenery: stays paused until a step nudges it, then drifts back to a stop.
   const videoSource = hike.video || DEFAULT_VIDEO;
@@ -83,10 +95,13 @@ function WalkingView({ hike, onBack }) {
   const playerRef = useRef(player);
   playerRef.current = player;
 
-  const keepWalking = useCallback(() => {
+  // Drive the scenery for one step: set its speed to your pace, play, and
+  // schedule a pause once you stop (with cadence reset so the next start is fresh).
+  const keepWalking = useCallback((rate, linger) => {
     const p = playerRef.current;
     if (!p) return;
     try {
+      p.playbackRate = rate;
       p.play();
     } catch (e) {}
     if (lingerTimerRef.current) clearTimeout(lingerTimerRef.current);
@@ -94,7 +109,33 @@ function WalkingView({ hike, onBack }) {
       try {
         playerRef.current && playerRef.current.pause();
       } catch (e) {}
-    }, WALK_LINGER_MS);
+      // Cadence is not reset here: the long-gap check in computePace() handles
+      // a genuine stop, while keeping slow-but-steady walking from resetting.
+    }, linger);
+  }, []);
+
+  // Average step interval -> a playback rate and a linger window.
+  const computePace = useCallback(() => {
+    const now = Date.now();
+    const last = lastStepAtRef.current;
+    lastStepAtRef.current = now;
+    if (last) {
+      const interval = now - last;
+      if (interval < CADENCE_RESET_MS) {
+        const arr = intervalsRef.current;
+        arr.push(interval);
+        if (arr.length > 4) arr.shift();
+      } else {
+        intervalsRef.current = [];
+      }
+    }
+    const arr = intervalsRef.current;
+    const avg = arr.length
+      ? arr.reduce((a, b) => a + b, 0) / arr.length
+      : BASE_INTERVAL_MS;
+    const rate = Math.max(MIN_RATE, Math.min(MAX_RATE, BASE_INTERVAL_MS / avg));
+    const linger = Math.max(MIN_LINGER_MS, Math.min(MAX_LINGER_MS, avg * 1.7));
+    return { rate, linger };
   }, []);
 
   const handleStep = useCallback(
@@ -108,7 +149,8 @@ function WalkingView({ hike, onBack }) {
         setSteps(newSteps);
         setNextFoot(newFoot);
         setFeedback(side === 'left' ? 'left foot' : 'right foot');
-        keepWalking();
+        const { rate, linger } = computePace();
+        keepWalking(rate, linger);
 
         if (newSteps >= hike.steps) {
           setDone(true);
@@ -123,7 +165,7 @@ function WalkingView({ hike, onBack }) {
         }, 600);
       }
     },
-    [hike.steps, keepWalking]
+    [hike.steps, keepWalking, computePace]
   );
 
   // Tidy up timers and stop the scenery when leaving the walk.
@@ -172,6 +214,8 @@ function WalkingView({ hike, onBack }) {
         onRestart={() => {
           stepsRef.current = 0;
           nextFootRef.current = 'left';
+          lastStepAtRef.current = 0;
+          intervalsRef.current = [];
           setSteps(0);
           setNextFoot('left');
           setFeedback('start walking');
