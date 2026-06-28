@@ -24,8 +24,14 @@ const MIN_LINGER_MS = 350;
 const MAX_LINGER_MS = 1600;
 // A gap longer than this means you stopped and restarted, so cadence resets.
 const CADENCE_RESET_MS = 1600;
-// Stepping quicker than this (sustained) counts as running, not walking.
-const RUN_THRESHOLD_MS = 230;
+// Running = a genuinely fast, sustained cadence: average step interval below
+// RUN_THRESHOLD_MS across at least RUN_MIN_SAMPLES steps. Tuned high so brisk
+// walking doesn't trip it.
+const RUN_THRESHOLD_MS = 175;
+const RUN_MIN_SAMPLES = 3;
+// When running is detected, movement is blocked for a breather.
+const BREATHER_MS = 2000;
+const BREATHER_MSG_SWITCH_MS = 1000;
 
 // Build tag, baked in at deploy time so you can tell which release is live.
 // (EXPO_PUBLIC_* vars are inlined by Expo at build; undefined in local dev.)
@@ -89,7 +95,7 @@ function WalkingView({ hike, onBack }) {
   const [feedback, setFeedback] = useState('start walking');
   const [done, setDone] = useState(false);
   const [invalidFlash, setInvalidFlash] = useState(false);
-  const [running, setRunning] = useState(false);
+  const [blocked, setBlocked] = useState(false);
 
   const nextFootRef = useRef('left');
   const stepsRef = useRef(0);
@@ -98,6 +104,10 @@ function WalkingView({ hike, onBack }) {
   // Cadence tracking: timestamp of the last step + recent step intervals.
   const lastStepAtRef = useRef(0);
   const intervalsRef = useRef([]);
+  // Breather: while blocked, steps are ignored and the scenery is held still.
+  const blockedRef = useRef(false);
+  const breatherTimerRef = useRef(null);
+  const breatherMsgTimerRef = useRef(null);
 
   // Scenery: stays paused until a step nudges it, then drifts back to a stop.
   const videoSource = hike.video || DEFAULT_VIDEO;
@@ -148,12 +158,49 @@ function WalkingView({ hike, onBack }) {
       : BASE_INTERVAL_MS;
     const rate = Math.max(MIN_RATE, Math.min(MAX_RATE, BASE_INTERVAL_MS / avg));
     const linger = Math.max(MIN_LINGER_MS, Math.min(MAX_LINGER_MS, avg * 1.7));
-    return { rate, linger, avg, sampled: arr.length > 0 };
+    return { rate, linger, avg, samples: arr.length };
+  }, []);
+
+  // Block movement for a couple seconds and tell them to slow down.
+  const startBreather = useCallback(() => {
+    blockedRef.current = true;
+    setBlocked(true);
+    // Hold the scenery still for the breather.
+    if (lingerTimerRef.current) clearTimeout(lingerTimerRef.current);
+    try {
+      playerRef.current && playerRef.current.pause();
+    } catch (e) {}
+    setFeedback('No running!');
+    if (breatherMsgTimerRef.current) clearTimeout(breatherMsgTimerRef.current);
+    breatherMsgTimerRef.current = setTimeout(
+      () => setFeedback('Take a breath.'),
+      BREATHER_MSG_SWITCH_MS
+    );
+    if (breatherTimerRef.current) clearTimeout(breatherTimerRef.current);
+    breatherTimerRef.current = setTimeout(() => {
+      blockedRef.current = false;
+      setBlocked(false);
+      lastStepAtRef.current = 0;
+      intervalsRef.current = [];
+      setFeedback(nextFootRef.current + ' foot');
+    }, BREATHER_MS);
   }, []);
 
   const handleStep = useCallback(
     (side) => {
+      // During a breather, movement is frozen and steps are ignored.
+      if (blockedRef.current) return;
+
       if (side === nextFootRef.current) {
+        const { rate, linger, avg, samples } = computePace();
+
+        // Sustained fast cadence = running. This is a walking game: don't count
+        // the step, just freeze and make them slow down.
+        if (samples >= RUN_MIN_SAMPLES && avg < RUN_THRESHOLD_MS) {
+          startBreather();
+          return;
+        }
+
         const newSteps = stepsRef.current + 1;
         stepsRef.current = newSteps;
         const newFoot = nextFootRef.current === 'left' ? 'right' : 'left';
@@ -161,17 +208,8 @@ function WalkingView({ hike, onBack }) {
 
         setSteps(newSteps);
         setNextFoot(newFoot);
-        const { rate, linger, avg, sampled } = computePace();
         keepWalking(rate, linger);
-
-        // Sustained fast cadence = running. This is a walking game.
-        const running = sampled && avg < RUN_THRESHOLD_MS;
-        setRunning(running);
-        if (running) {
-          setFeedback('no running!');
-        } else {
-          setFeedback(side === 'left' ? 'left foot' : 'right foot');
-        }
+        setFeedback(side === 'left' ? 'left foot' : 'right foot');
 
         if (newSteps >= hike.steps) {
           setDone(true);
@@ -179,7 +217,6 @@ function WalkingView({ hike, onBack }) {
       } else {
         if (invalidTimerRef.current) clearTimeout(invalidTimerRef.current);
         setInvalidFlash(true);
-        setRunning(false);
         setFeedback('same foot');
         invalidTimerRef.current = setTimeout(() => {
           setInvalidFlash(false);
@@ -187,7 +224,7 @@ function WalkingView({ hike, onBack }) {
         }, 600);
       }
     },
-    [hike.steps, keepWalking, computePace]
+    [hike.steps, keepWalking, computePace, startBreather]
   );
 
   // Tidy up timers and stop the scenery when leaving the walk.
@@ -195,6 +232,8 @@ function WalkingView({ hike, onBack }) {
     return () => {
       if (invalidTimerRef.current) clearTimeout(invalidTimerRef.current);
       if (lingerTimerRef.current) clearTimeout(lingerTimerRef.current);
+      if (breatherTimerRef.current) clearTimeout(breatherTimerRef.current);
+      if (breatherMsgTimerRef.current) clearTimeout(breatherMsgTimerRef.current);
     };
   }, []);
 
@@ -238,7 +277,10 @@ function WalkingView({ hike, onBack }) {
           nextFootRef.current = 'left';
           lastStepAtRef.current = 0;
           intervalsRef.current = [];
-          setRunning(false);
+          blockedRef.current = false;
+          if (breatherTimerRef.current) clearTimeout(breatherTimerRef.current);
+          if (breatherMsgTimerRef.current) clearTimeout(breatherMsgTimerRef.current);
+          setBlocked(false);
           setSteps(0);
           setNextFoot('left');
           setFeedback('start walking');
@@ -291,12 +333,19 @@ function WalkingView({ hike, onBack }) {
           style={[
             styles.feedback,
             invalidFlash && styles.feedbackInvalid,
-            running && styles.feedbackRunning,
+            blocked && styles.feedbackRunning,
           ]}
         >
           {feedback}
         </Text>
       </SafeAreaView>
+
+      {blocked && (
+        <View style={styles.breatherOverlay} pointerEvents="none">
+          <Text style={styles.breatherText}>{feedback}</Text>
+        </View>
+      )}
+
       <Text style={styles.buildTagOverlay}>{BUILD_LABEL}</Text>
     </View>
   );
@@ -449,6 +498,18 @@ const styles = StyleSheet.create({
   feedbackRunning: {
     color: '#ffd24d',
     fontWeight: '700',
+  },
+  breatherOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  breatherText: {
+    color: '#ffd24d',
+    fontSize: 30,
+    fontWeight: '700',
+    letterSpacing: 0.5,
   },
   buildTagOverlay: {
     position: 'absolute',
