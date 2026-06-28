@@ -117,7 +117,7 @@ const THEMES = {
   appalachian: {
     kind: 'appalachian',
     zoom: 13,
-    stepWorld: 0.7,
+    stepWorld: 0.5,
     bg: '#cdd9b8',
     route: '#9c7b46',
     traveled: '#6f5128',
@@ -185,7 +185,7 @@ function buildScenery(theme, loop, seed) {
     const b = bounds(loop.points);
 
     // Mountains (topographic contour bands), behind everything.
-    makeMountains(seed, b).forEach((pk, pi) => {
+    makeMountains(seed, b, 11).forEach((pk, pi) => {
       const r = seededRand(pk.seed);
       MTN_BANDS.forEach((band, bi) => {
         els.push(
@@ -238,7 +238,7 @@ function buildScenery(theme, loop, seed) {
     });
 
     // Forest on top — patchy enough to let the mountains show through.
-    const { trees } = makeTrailScenery(seed, loop, 80);
+    const { trees } = makeTrailScenery(seed, loop, 150);
     trees.forEach((t, i) =>
       els.push(
         <Circle key={`t${i}`} cx={t.x * Z} cy={t.y * Z} r={t.r * Z * 0.82} fill={theme.tree} stroke={theme.treeRing} strokeWidth={1} />
@@ -274,15 +274,33 @@ function Overview({ built, progress, theme }) {
   );
 }
 
+// A real stretch of the Appalachian Trail, recentered and scaled, used as the
+// open path the nav view walks (out-and-back). Real geometry, real bends.
+function atSectionPoints() {
+  const slice = AT_SHAPE.slice(90, 230);
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  slice.forEach((p) => {
+    minX = Math.min(minX, p.x);
+    minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x);
+    maxY = Math.max(maxY, p.y);
+  });
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const s = 58 / (Math.max(maxX - minX, maxY - minY) || 1);
+  return slice.map((p) => ({ x: (p.x - cx) * s, y: (p.y - cy) * s }));
+}
+
 export default function RouteMap({ hike, steps }) {
   const [size, setSize] = useState({ w: 0, h: 0 });
   const seed = useMemo(() => hashId(hike.id), [hike.id]);
   const theme = useMemo(() => themeFor(hike), [hike.id]);
   const Z = theme.zoom;
 
-  // Local loop drives the zoomed nav view (advances a fixed distance per step).
-  const loop = useMemo(
-    () => buildPath(makeLoopRoute(theme.kind, seed)),
+  // The zoomed nav view follows a local path, advancing a fixed distance per
+  // step. The AT traces a real trail section (out-and-back); others loop.
+  const localPath = useMemo(
+    () => buildPath(theme.kind === 'appalachian' ? atSectionPoints() : makeLoopRoute(theme.kind, seed)),
     [hike.id]
   );
   // Whole-journey route drives the overview inset (true overall progress).
@@ -294,11 +312,11 @@ export default function RouteMap({ hike, steps }) {
 
   const stars = useMemo(() => (theme.stars ? makeStars(seed) : []), [hike.id, theme.stars]);
   const skyStars = useMemo(() => (theme.dayNight ? makeStars(seed, 70) : []), [hike.id, theme.dayNight]);
-  const scenery = useMemo(() => buildScenery(theme, loop, seed), [hike.id]);
+  const scenery = useMemo(() => buildScenery(theme, localPath, seed), [hike.id]);
   const loopEl = useMemo(
     () => (
       <Polyline
-        points={toPolyline(loop.points, Z)}
+        points={toPolyline(localPath.points, Z)}
         fill="none"
         stroke={theme.route}
         strokeWidth={theme.kind === 'city' ? 4 : 5}
@@ -311,10 +329,20 @@ export default function RouteMap({ hike, steps }) {
     [hike.id]
   );
 
-  // Position along the loop from the eased step count; wraps seamlessly.
+  // Position along the local path from the eased step count. The AT path is
+  // open, so ping-pong (out-and-back); loops just wrap.
   const localArc = steps * theme.stepWorld;
-  const frac = loop.total > 0 ? (localArc % loop.total) / loop.total : 0;
-  const pin = pointAt(loop, frac);
+  const L = localPath.total;
+  let frac = 0;
+  if (L > 0) {
+    if (theme.kind === 'appalachian') {
+      const ph = ((localArc % (2 * L)) + 2 * L) % (2 * L);
+      frac = (ph <= L ? ph : 2 * L - ph) / L;
+    } else {
+      frac = (localArc % L) / L;
+    }
+  }
+  const pin = pointAt(localPath, frac);
   const cx = size.w / 2;
   const cy = size.h * 0.55;
   const tx = cx - pin.x * Z;
