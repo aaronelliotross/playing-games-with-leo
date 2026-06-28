@@ -185,6 +185,37 @@ export function makeCityScenery(seed, built, maxCells = 700) {
   return { buildings, parks };
 }
 
+// A closed loop the player walks around in the zoomed nav view. Closed (last
+// point == first) so looping the arc never jumps. City = a grid block circuit;
+// otherwise an organic blob.
+export function makeLoopRoute(kind, seed) {
+  const rand = seededRand(seed ^ 0x1234567);
+  if (kind === 'city') {
+    const W = 5 + Math.floor(rand() * 4); // 5..8 blocks
+    const H = 5 + Math.floor(rand() * 4);
+    const grid = [];
+    for (let i = 0; i <= W; i++) grid.push({ x: i, y: 0 });
+    for (let j = 1; j <= H; j++) grid.push({ x: W, y: j });
+    for (let i = W - 1; i >= 0; i--) grid.push({ x: i, y: H });
+    for (let j = H - 1; j >= 1; j--) grid.push({ x: 0, y: j });
+    grid.push({ x: 0, y: 0 });
+    return grid.map((p) => ({ x: p.x * CITY_BLOCK, y: p.y * CITY_BLOCK }));
+  }
+  const M = 48;
+  const R = 9 + rand() * 5;
+  const p1 = rand() * Math.PI * 2;
+  const p2 = rand() * Math.PI * 2;
+  const p3 = rand() * Math.PI * 2;
+  const pts = [];
+  for (let k = 0; k < M; k++) {
+    const a = (2 * Math.PI * k) / M;
+    const rr = R * (1 + 0.16 * Math.sin(2 * a + p1) + 0.1 * Math.sin(3 * a + p2) + 0.06 * Math.sin(5 * a + p3));
+    pts.push({ x: Math.cos(a) * rr, y: Math.sin(a) * rr });
+  }
+  pts.push({ ...pts[0] });
+  return pts;
+}
+
 // Trees scattered through the route's bounding area.
 export function makeTrailScenery(seed, built, n = 110) {
   const rand = seededRand(seed ^ 0x27d4eb2f);

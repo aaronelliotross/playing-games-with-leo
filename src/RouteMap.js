@@ -5,6 +5,7 @@ import {
   hashId,
   makeRoute,
   makeCityRoute,
+  makeLoopRoute,
   buildPath,
   pointAt,
   sliceTo,
@@ -25,8 +26,9 @@ const THEMES = {
   trail: {
     kind: 'trail',
     zoom: 13,
+    stepWorld: 0.7, // route units advanced per step in the nav view
     bg: '#dfe6cf',
-    route: '#cbb78f',
+    route: '#b79a63',
     traveled: '#8a6a39',
     pin: '#5b4a25',
     tree: '#5f8d4e',
@@ -35,8 +37,9 @@ const THEMES = {
   city: {
     kind: 'city',
     zoom: 8,
+    stepWorld: 1.4,
     bg: '#c0c5cc',
-    route: '#86acf6',
+    route: '#2f6df0',
     traveled: '#1d4ed8',
     pin: '#1d4ed8',
     park: '#9cc08a',
@@ -45,6 +48,7 @@ const THEMES = {
   space: {
     kind: 'space',
     zoom: 13,
+    stepWorld: 0.7,
     bg: '#0b0d1a',
     route: '#343a54',
     traveled: '#9fb3ff',
@@ -67,13 +71,12 @@ function toPolyline(points, scale, ox = 0, oy = 0) {
     .join(' ');
 }
 
-// Static, world-space scenery for a theme. Memoized by the caller so these
-// elements keep referential identity across frames (only the parent <G>
-// transform changes as you walk).
-function buildScenery(theme, built, seed) {
+// Static, world-space scenery, memoized by the caller so elements keep
+// referential identity across frames (only the parent <G> transform changes).
+function buildScenery(theme, loop, seed) {
   const Z = theme.zoom;
   if (theme.kind === 'city') {
-    const { buildings, parks } = makeCityScenery(seed, built);
+    const { buildings, parks } = makeCityScenery(seed, loop);
     const els = [];
     parks.forEach((p, i) =>
       els.push(
@@ -97,7 +100,7 @@ function buildScenery(theme, built, seed) {
     return els;
   }
   if (theme.kind === 'trail') {
-    const { trees } = makeTrailScenery(seed, built);
+    const { trees } = makeTrailScenery(seed, loop);
     return trees.map((t, i) => (
       <Circle key={`t${i}`} cx={t.x * Z} cy={t.y * Z} r={t.r * Z} fill={theme.tree} stroke={theme.treeRing} strokeWidth={1} />
     ));
@@ -105,6 +108,7 @@ function buildScenery(theme, built, seed) {
   return null;
 }
 
+// Whole-journey minimap with the pin at the true overall fraction.
 function Overview({ built, progress, theme }) {
   const b = useMemo(() => bounds(built.points), [built]);
   const spanX = b.maxX - b.minX || 1;
@@ -131,39 +135,51 @@ function Overview({ built, progress, theme }) {
   );
 }
 
-export default function RouteMap({ hike, progress }) {
+export default function RouteMap({ hike, steps }) {
   const [size, setSize] = useState({ w: 0, h: 0 });
   const seed = useMemo(() => hashId(hike.id), [hike.id]);
   const theme = useMemo(() => themeFor(hike), [hike.id]);
-  const built = useMemo(
+  const Z = theme.zoom;
+
+  // Local loop drives the zoomed nav view (advances a fixed distance per step).
+  const loop = useMemo(
+    () => buildPath(makeLoopRoute(theme.kind, seed)),
+    [hike.id]
+  );
+  // Whole-journey route drives the overview inset (true overall progress).
+  const journey = useMemo(
     () => buildPath(theme.kind === 'city' ? makeCityRoute(seed) : makeRoute(seed)),
     [hike.id]
   );
-  const Z = theme.zoom;
 
   const stars = useMemo(() => (theme.stars ? makeStars(seed) : []), [hike.id, theme.stars]);
-  const scenery = useMemo(() => buildScenery(theme, built, seed), [hike.id]);
-  const remainingEl = useMemo(
+  const scenery = useMemo(() => buildScenery(theme, loop, seed), [hike.id]);
+  const loopEl = useMemo(
     () => (
       <Polyline
-        points={toPolyline(built.points, Z)}
+        points={toPolyline(loop.points, Z)}
         fill="none"
         stroke={theme.route}
         strokeWidth={theme.kind === 'city' ? 4 : 5}
         strokeDasharray={theme.kind === 'city' ? '7 5' : undefined}
         strokeLinecap="round"
         strokeLinejoin="round"
+        opacity={0.9}
       />
     ),
     [hike.id]
   );
 
-  const pin = pointAt(built, progress);
+  // Position along the loop from the eased step count; wraps seamlessly.
+  const localArc = steps * theme.stepWorld;
+  const frac = loop.total > 0 ? (localArc % loop.total) / loop.total : 0;
+  const pin = pointAt(loop, frac);
   const cx = size.w / 2;
-  const cy = size.h * 0.6;
+  const cy = size.h * 0.55;
   const tx = cx - pin.x * Z;
   const ty = cy - pin.y * Z;
-  const traveled = toPolyline(sliceTo(built, progress), Z);
+
+  const overallProgress = Math.min(1, steps / hike.steps);
 
   return (
     <View
@@ -177,22 +193,14 @@ export default function RouteMap({ hike, progress }) {
           ))}
           <G transform={`translate(${tx} ${ty})`}>
             {scenery}
-            {remainingEl}
-            <Polyline
-              points={traveled}
-              fill="none"
-              stroke={theme.traveled}
-              strokeWidth={theme.kind === 'city' ? 4 : 5}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
+            {loopEl}
           </G>
           {/* Pin stays centered; the world scrolls beneath it. */}
           <Circle cx={cx} cy={cy} r={12} fill={theme.traveled} opacity={0.22} />
           <Circle cx={cx} cy={cy} r={6.5} fill={theme.pin} stroke="#fff" strokeWidth={2} />
         </Svg>
       )}
-      <Overview built={built} progress={progress} theme={theme} />
+      <Overview built={journey} progress={overallProgress} theme={theme} />
     </View>
   );
 }

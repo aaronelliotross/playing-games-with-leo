@@ -86,8 +86,9 @@ function WalkingView({ hike, onBack }) {
   const [done, setDone] = useState(false);
   const [invalidFlash, setInvalidFlash] = useState(false);
   const [blocked, setBlocked] = useState(false);
-  // Eased pin position (0..1) that follows the true step progress smoothly.
-  const [displayed, setDisplayed] = useState(0);
+  // Eased step count that the map follows smoothly (advances the nav view a
+  // fixed distance per step, independent of the hike's total length).
+  const [displayedSteps, setDisplayedSteps] = useState(0);
 
   const nextFootRef = useRef('left');
   const stepsRef = useRef(0);
@@ -100,20 +101,21 @@ function WalkingView({ hike, onBack }) {
   const breatherTimerRef = useRef(null);
   const breatherMsgTimerRef = useRef(null);
   // Pin easing.
-  const displayedRef = useRef(0);
+  const displayedStepsRef = useRef(0);
 
-  // Smoothly ease the pin toward its true progress; only re-renders while moving.
+  // Smoothly ease the displayed step count toward the true one; only re-renders
+  // while moving.
   useEffect(() => {
     let raf;
     let mounted = true;
     const tick = () => {
-      const target = Math.min(1, stepsRef.current / hike.steps);
-      const cur = displayedRef.current;
+      const target = stepsRef.current;
+      const cur = displayedStepsRef.current;
       let next = cur + (target - cur) * PIN_EASE;
-      if (Math.abs(target - next) < 1e-4) next = target;
+      if (Math.abs(target - next) < 0.01) next = target;
       if (next !== cur) {
-        displayedRef.current = next;
-        setDisplayed(next);
+        displayedStepsRef.current = next;
+        setDisplayedSteps(next);
       }
       if (mounted) raf = requestAnimationFrame(tick);
     };
@@ -122,7 +124,7 @@ function WalkingView({ hike, onBack }) {
       mounted = false;
       cancelAnimationFrame(raf);
     };
-  }, [hike.steps]);
+  }, []);
 
   // Track step cadence; returns the recent average interval and sample count.
   const computePace = useCallback(() => {
@@ -253,11 +255,11 @@ function WalkingView({ hike, onBack }) {
           lastStepAtRef.current = 0;
           intervalsRef.current = [];
           blockedRef.current = false;
-          displayedRef.current = 0;
+          displayedStepsRef.current = 0;
           if (breatherTimerRef.current) clearTimeout(breatherTimerRef.current);
           if (breatherMsgTimerRef.current) clearTimeout(breatherMsgTimerRef.current);
           setBlocked(false);
-          setDisplayed(0);
+          setDisplayedSteps(0);
           setSteps(0);
           setNextFoot('left');
           setFeedback('start walking');
@@ -270,7 +272,7 @@ function WalkingView({ hike, onBack }) {
 
   return (
     <View style={styles.walkingRoot}>
-      <RouteMap hike={hike} progress={displayed} />
+      <RouteMap hike={hike} steps={displayedSteps} />
 
       <SafeAreaView style={styles.walkingOverlay} {...panResponder.panHandlers}>
         <View style={styles.topPanel}>
