@@ -107,3 +107,96 @@ export function makeStars(seed, n = 60) {
   }
   return stars;
 }
+
+function seededRand(seed) {
+  let s = seed % 2147483647;
+  if (s <= 0) s += 2147483646;
+  return () => {
+    s = (s * 16807) % 2147483647;
+    return s / 2147483647;
+  };
+}
+
+export const CITY_BLOCK = 7;
+
+// A route that follows a street grid: straight legs along blocks with the odd
+// right-angle turn, biased to keep heading "north" so the walk progresses.
+export function makeCityRoute(seed, n = 46) {
+  const rand = seededRand(seed);
+  const dirs = [
+    { x: 0, y: -1 }, // N
+    { x: 1, y: 0 }, // E
+    { x: 0, y: 1 }, // S
+    { x: -1, y: 0 }, // W
+  ];
+  let d = 0; // start north
+  let gx = 0;
+  let gy = 0;
+  const pts = [{ x: 0, y: 0 }];
+  for (let i = 0; i < n; i++) {
+    if (rand() < 0.3) {
+      const turn = rand() < 0.5 ? 1 : 3; // right or left
+      let nd = (d + turn) % 4;
+      // avoid heading south most of the time so the route keeps advancing
+      if (dirs[nd].y > 0 && rand() < 0.75) nd = d;
+      d = nd;
+    }
+    gx += dirs[d].x;
+    gy += dirs[d].y;
+    pts.push({ x: gx * CITY_BLOCK, y: gy * CITY_BLOCK });
+  }
+  return pts;
+}
+
+// Building footprints (and occasional parks) filling the blocks around the
+// route. Returned in route units; capped so big routes stay cheap.
+export function makeCityScenery(seed, built, maxCells = 700) {
+  const rand = seededRand(seed ^ 0x5bd1e995);
+  const b = bounds(built.points);
+  const gi0 = Math.floor(b.minX / CITY_BLOCK) - 2;
+  const gi1 = Math.ceil(b.maxX / CITY_BLOCK) + 2;
+  const gj0 = Math.floor(b.minY / CITY_BLOCK) - 2;
+  const gj1 = Math.ceil(b.maxY / CITY_BLOCK) + 2;
+  const inset = 1.3;
+  const cell = CITY_BLOCK - 2 * inset;
+  const buildings = [];
+  const parks = [];
+  let count = 0;
+  for (let gi = gi0; gi < gi1; gi++) {
+    for (let gj = gj0; gj < gj1; gj++) {
+      if (count++ > maxCells) break;
+      const r = rand();
+      const x0 = gi * CITY_BLOCK + inset;
+      const y0 = gj * CITY_BLOCK + inset;
+      if (r < 0.12) {
+        parks.push({ x: x0, y: y0, w: cell, h: cell });
+        continue;
+      }
+      const shrink = rand() * 1.4;
+      buildings.push({
+        x: x0 + shrink * 0.5,
+        y: y0 + shrink * 0.5,
+        w: cell - shrink,
+        h: cell - shrink,
+        shade: Math.floor(rand() * 6),
+      });
+    }
+  }
+  return { buildings, parks };
+}
+
+// Trees scattered through the route's bounding area.
+export function makeTrailScenery(seed, built, n = 110) {
+  const rand = seededRand(seed ^ 0x27d4eb2f);
+  const b = bounds(built.points);
+  const pad = 5;
+  const trees = [];
+  for (let i = 0; i < n; i++) {
+    trees.push({
+      x: b.minX - pad + rand() * (b.maxX - b.minX + 2 * pad),
+      y: b.minY - pad + rand() * (b.maxY - b.minY + 2 * pad),
+      r: 1.1 + rand() * 1.7,
+    });
+  }
+  return { trees };
+}
