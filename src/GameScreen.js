@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -9,9 +9,15 @@ import {
   TouchableOpacity,
   SafeAreaView,
 } from 'react-native';
+import { useVideoPlayer, VideoView } from 'expo-video';
 import { HIKES } from './hikeData';
 
 const SWIPE_THRESHOLD = 40;
+// How long the scenery keeps moving after a step before it pauses again.
+const WALK_LINGER_MS = 480;
+
+// Default scenery used until a hike supplies its own clip.
+const DEFAULT_VIDEO = require('../assets/walk_trail.mp4');
 
 function formatSteps(n) {
   return n.toLocaleString();
@@ -66,6 +72,30 @@ function WalkingView({ hike, onBack }) {
   const nextFootRef = useRef('left');
   const stepsRef = useRef(0);
   const invalidTimerRef = useRef(null);
+  const lingerTimerRef = useRef(null);
+
+  // Scenery: stays paused until a step nudges it, then drifts back to a stop.
+  const videoSource = hike.video || DEFAULT_VIDEO;
+  const player = useVideoPlayer(videoSource, (p) => {
+    p.loop = true;
+    p.muted = true;
+  });
+  const playerRef = useRef(player);
+  playerRef.current = player;
+
+  const keepWalking = useCallback(() => {
+    const p = playerRef.current;
+    if (!p) return;
+    try {
+      p.play();
+    } catch (e) {}
+    if (lingerTimerRef.current) clearTimeout(lingerTimerRef.current);
+    lingerTimerRef.current = setTimeout(() => {
+      try {
+        playerRef.current && playerRef.current.pause();
+      } catch (e) {}
+    }, WALK_LINGER_MS);
+  }, []);
 
   const handleStep = useCallback(
     (side) => {
@@ -78,6 +108,7 @@ function WalkingView({ hike, onBack }) {
         setSteps(newSteps);
         setNextFoot(newFoot);
         setFeedback(side === 'left' ? 'left foot' : 'right foot');
+        keepWalking();
 
         if (newSteps >= hike.steps) {
           setDone(true);
@@ -92,8 +123,16 @@ function WalkingView({ hike, onBack }) {
         }, 600);
       }
     },
-    [hike.steps]
+    [hike.steps, keepWalking]
   );
+
+  // Tidy up timers and stop the scenery when leaving the walk.
+  useEffect(() => {
+    return () => {
+      if (invalidTimerRef.current) clearTimeout(invalidTimerRef.current);
+      if (lingerTimerRef.current) clearTimeout(lingerTimerRef.current);
+    };
+  }, []);
 
   const startX = useRef(0);
 
@@ -144,48 +183,46 @@ function WalkingView({ hike, onBack }) {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.walkingHeader}>
-        <TouchableOpacity onPress={onBack}>
-          <Text style={styles.backLink}>← hikes</Text>
-        </TouchableOpacity>
-        <Text style={styles.walkingTitle}>{hike.name}</Text>
-        <Text style={styles.walkingDistance}>{hike.distanceLabel}</Text>
-      </View>
+    <View style={styles.walkingRoot}>
+      <VideoView
+        style={StyleSheet.absoluteFill}
+        player={player}
+        contentFit="cover"
+        nativeControls={false}
+        pointerEvents="none"
+      />
 
-      <View style={styles.progressSection}>
-        <Text style={styles.stepCount}>
-          {formatSteps(steps)} / {formatSteps(hike.steps)}
-        </Text>
-        <Text style={styles.stepLabel}>steps</Text>
-        <Text style={styles.pctLabel}>{pct.toFixed(1)}% complete</Text>
-        <View style={styles.progressBarOuter}>
-          <View style={[styles.progressBarInner, { width: pct + '%' }]} />
+      <SafeAreaView style={styles.walkingOverlay} {...panResponder.panHandlers}>
+        <View style={styles.topPanel}>
+          <TouchableOpacity onPress={onBack}>
+            <Text style={styles.backLink}>← hikes</Text>
+          </TouchableOpacity>
+          <Text style={styles.walkingTitle}>{hike.name}</Text>
+          <Text style={styles.stepCount}>
+            {formatSteps(steps)} / {formatSteps(hike.steps)} steps
+          </Text>
+          <Text style={styles.pctLabel}>{pct.toFixed(1)}% complete</Text>
+          <View style={styles.progressBarOuter}>
+            <View style={[styles.progressBarInner, { width: pct + '%' }]} />
+          </View>
         </View>
-      </View>
 
-      <View
-        style={styles.gestureArea}
-        {...panResponder.panHandlers}
-      >
-        <View style={styles.footZones}>
+        <View style={styles.footZones} pointerEvents="none">
           <View style={[styles.footZone, nextFoot === 'left' && styles.footZoneActive]}>
             <Text style={[styles.footZoneText, nextFoot === 'left' && styles.footZoneTextActive]}>
               LEFT
             </Text>
           </View>
-          <View style={styles.footZoneDivider} />
           <View style={[styles.footZone, nextFoot === 'right' && styles.footZoneActive]}>
             <Text style={[styles.footZoneText, nextFoot === 'right' && styles.footZoneTextActive]}>
               RIGHT
             </Text>
           </View>
         </View>
-        <Text style={[styles.feedback, invalidFlash && styles.feedbackInvalid]}>
-          {feedback}
-        </Text>
-      </View>
-    </SafeAreaView>
+
+        <Text style={[styles.feedback, invalidFlash && styles.feedbackInvalid]}>{feedback}</Text>
+      </SafeAreaView>
+    </View>
   );
 }
 
@@ -196,12 +233,7 @@ export default function GameScreen() {
     return <HikeSelector onSelect={setCurrentHike} />;
   }
 
-  return (
-    <WalkingView
-      hike={currentHike}
-      onBack={() => setCurrentHike(null)}
-    />
-  );
+  return <WalkingView hike={currentHike} onBack={() => setCurrentHike(null)} />;
 }
 
 const styles = StyleSheet.create({
@@ -241,67 +273,57 @@ const styles = StyleSheet.create({
     color: '#999',
   },
 
-  // Walking view
-  walkingHeader: {
-    padding: 20,
-    paddingBottom: 12,
+  // Walking view (video background + overlay)
+  walkingRoot: {
+    flex: 1,
+    backgroundColor: '#2b2b2b',
+  },
+  walkingOverlay: {
+    flex: 1,
+    justifyContent: 'space-between',
+  },
+  topPanel: {
+    backgroundColor: 'rgba(245,245,240,0.86)',
+    paddingHorizontal: 20,
+    paddingTop: 14,
+    paddingBottom: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#ddd',
+    borderBottomColor: 'rgba(0,0,0,0.12)',
   },
   backLink: {
     fontSize: 13,
-    color: '#666',
+    color: '#555',
     marginBottom: 8,
   },
   walkingTitle: {
     fontSize: 18,
     fontWeight: '600',
     color: '#1a1a1a',
-  },
-  walkingDistance: {
-    fontSize: 13,
-    color: '#888',
-    marginTop: 2,
-  },
-
-  progressSection: {
-    padding: 20,
-    paddingBottom: 16,
+    marginBottom: 6,
   },
   stepCount: {
-    fontSize: 28,
+    fontSize: 24,
     fontWeight: '300',
     color: '#1a1a1a',
     letterSpacing: -0.5,
   },
-  stepLabel: {
-    fontSize: 13,
-    color: '#888',
-    marginTop: 2,
-    marginBottom: 8,
-  },
   pctLabel: {
     fontSize: 13,
     color: '#555',
+    marginTop: 2,
     marginBottom: 10,
   },
   progressBarOuter: {
     height: 6,
-    backgroundColor: '#ddd',
+    backgroundColor: 'rgba(0,0,0,0.15)',
     borderRadius: 3,
   },
   progressBarInner: {
     height: 6,
-    backgroundColor: '#555',
+    backgroundColor: '#333',
     borderRadius: 3,
   },
 
-  // Gesture area
-  gestureArea: {
-    flex: 1,
-    justifyContent: 'space-between',
-    paddingBottom: 20,
-  },
   footZones: {
     flex: 1,
     flexDirection: 'row',
@@ -312,31 +334,32 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   footZoneActive: {
-    backgroundColor: '#eee',
+    backgroundColor: 'rgba(255,255,255,0.16)',
   },
   footZoneText: {
     fontSize: 13,
     letterSpacing: 2,
-    color: '#ccc',
-    fontWeight: '500',
+    color: 'rgba(255,255,255,0.45)',
+    fontWeight: '600',
+    textShadowColor: 'rgba(0,0,0,0.5)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
   footZoneTextActive: {
-    color: '#888',
-  },
-  footZoneDivider: {
-    width: 1,
-    backgroundColor: '#e0e0e0',
-    marginVertical: 20,
+    color: 'rgba(255,255,255,0.95)',
   },
   feedback: {
     textAlign: 'center',
-    fontSize: 14,
-    color: '#888',
-    paddingBottom: 8,
+    fontSize: 15,
+    color: '#fff',
+    paddingBottom: 24,
     letterSpacing: 1,
+    textShadowColor: 'rgba(0,0,0,0.6)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
   },
   feedbackInvalid: {
-    color: '#bbb',
+    color: 'rgba(255,255,255,0.55)',
   },
 
   // Completion
