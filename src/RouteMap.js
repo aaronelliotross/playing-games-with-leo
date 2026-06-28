@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { View, StyleSheet } from 'react-native';
-import Svg, { Polyline, Circle, G, Rect } from 'react-native-svg';
+import Svg, { Polyline, Polygon, Circle, G, Rect } from 'react-native-svg';
 import {
   hashId,
   makeRoute,
@@ -13,7 +13,64 @@ import {
   makeStars,
   makeCityScenery,
   makeTrailScenery,
+  makeMountains,
+  makeRiver,
+  wobblyRing,
 } from './routeGeometry';
+
+const seededRand = (seed) => {
+  let s = seed % 2147483647;
+  if (s <= 0) s += 2147483646;
+  return () => {
+    s = (s * 16807) % 2147483647;
+    return s / 2147483647;
+  };
+};
+
+// Topographic contour bands for a mountain, forested base -> rocky summit.
+const MTN_BANDS = [
+  { f: 1.0, fill: '#46663a' },
+  { f: 0.74, fill: '#5d8047' },
+  { f: 0.5, fill: '#869a5d' },
+  { f: 0.28, fill: '#bcb085' },
+];
+const MTN_STROKE = 'rgba(40,55,30,0.35)';
+
+function ptsToStr(points, scale) {
+  return points.map((p) => `${(p.x * scale).toFixed(1)},${(p.y * scale).toFixed(1)}`).join(' ');
+}
+
+// dawn -> day -> dusk -> night, cycling every DAY_STEPS steps.
+const DAY_STEPS = 220;
+function skyState(steps) {
+  const p = (((steps / DAY_STEPS) % 1) + 1) % 1;
+  const keys = [
+    { p: 0, o: [255, 150, 70, 0.16] },
+    { p: 0.22, o: [255, 255, 255, 0.0] },
+    { p: 0.5, o: [255, 110, 50, 0.2] },
+    { p: 0.72, o: [8, 14, 40, 0.52] },
+    { p: 1, o: [255, 150, 70, 0.16] },
+  ];
+  let o = keys[0].o;
+  for (let i = 1; i < keys.length; i++) {
+    if (p <= keys[i].p) {
+      const k0 = keys[i - 1];
+      const k1 = keys[i];
+      const f = (p - k0.p) / (k1.p - k0.p || 1);
+      o = k0.o.map((v, j) => v + (k1.o[j] - v) * f);
+      break;
+    }
+  }
+  const night = Math.max(0, 1 - Math.min(1, Math.abs(p - 0.72) / 0.28));
+  const isMoon = p >= 0.5;
+  const sp = isMoon ? (p - 0.5) / 0.5 : p / 0.5;
+  return {
+    overlay: `rgba(${Math.round(o[0])},${Math.round(o[1])},${Math.round(o[2])},${o[3].toFixed(3)})`,
+    night,
+    isMoon,
+    sp,
+  };
+}
 
 // Whole-route overview inset size.
 const OVERVIEW_W = 116;
@@ -55,11 +112,27 @@ const THEMES = {
     pin: '#eaf0ff',
     stars: true,
   },
+  appalachian: {
+    kind: 'appalachian',
+    zoom: 13,
+    stepWorld: 0.7,
+    bg: '#cdd9b8',
+    route: '#9c7b46',
+    traveled: '#6f5128',
+    pin: '#4a3a1d',
+    tree: '#4f7d3e',
+    treeRing: '#3a5e2c',
+    river: '#74a7c4',
+    riverEdge: '#5b8aa6',
+    bridge: '#7a5a3a',
+    dayNight: true,
+  },
 };
 const THEME_BY_HIKE = {
   corner_store: 'city',
   around_the_block: 'city',
   walk_to_the_moon: 'space',
+  appalachian_trail: 'appalachian',
 };
 function themeFor(hike) {
   return THEMES[THEME_BY_HIKE[hike.id]] || THEMES.trail;
@@ -104,6 +177,72 @@ function buildScenery(theme, loop, seed) {
     return trees.map((t, i) => (
       <Circle key={`t${i}`} cx={t.x * Z} cy={t.y * Z} r={t.r * Z} fill={theme.tree} stroke={theme.treeRing} strokeWidth={1} />
     ));
+  }
+  if (theme.kind === 'appalachian') {
+    const els = [];
+    const b = bounds(loop.points);
+
+    // Mountains (topographic contour bands), behind everything.
+    makeMountains(seed, b).forEach((pk, pi) => {
+      const r = seededRand(pk.seed);
+      MTN_BANDS.forEach((band, bi) => {
+        els.push(
+          <Polygon
+            key={`m${pi}-${bi}`}
+            points={ptsToStr(wobblyRing(pk.cx, pk.cy, pk.R * band.f, r), Z)}
+            fill={band.fill}
+            stroke={bi === 0 ? MTN_STROKE : undefined}
+            strokeWidth={bi === 0 ? 1.5 : undefined}
+          />
+        );
+      });
+    });
+
+    // River band crossing the area, with a bridge at each trail crossing.
+    const river = makeRiver(seed, loop);
+    const diag = Math.hypot(b.maxX - b.minX, b.maxY - b.minY) * 1.3 + 10;
+    const { cx, cy, dir, N, width } = river;
+    const corner = (s1, s2) => ({
+      x: cx + dir.x * s1 * (diag / 2) + N.x * s2 * (width / 2),
+      y: cy + dir.y * s1 * (diag / 2) + N.y * s2 * (width / 2),
+    });
+    els.push(
+      <Polygon
+        key="river"
+        points={ptsToStr([corner(1, 1), corner(1, -1), corner(-1, -1), corner(-1, 1)], Z)}
+        fill={theme.river}
+        stroke={theme.riverEdge}
+        strokeWidth={1.5}
+      />
+    );
+    river.crossings.forEach((cr, ci) => {
+      const u = { x: Math.cos(cr.ang), y: Math.sin(cr.ang) }; // along trail
+      const n = { x: -u.y, y: u.x };
+      const len = width + 1.8;
+      const th = 1.9;
+      const bc = (s1, s2) => ({
+        x: cr.x + u.x * s1 * (len / 2) + n.x * s2 * (th / 2),
+        y: cr.y + u.y * s1 * (len / 2) + n.y * s2 * (th / 2),
+      });
+      els.push(
+        <Polygon
+          key={`br${ci}`}
+          points={ptsToStr([bc(1, 1), bc(1, -1), bc(-1, -1), bc(-1, 1)], Z)}
+          fill={theme.bridge}
+          stroke="#5e4329"
+          strokeWidth={1}
+        />
+      );
+    });
+
+    // Forest on top — patchy enough to let the mountains show through.
+    const { trees } = makeTrailScenery(seed, loop, 80);
+    trees.forEach((t, i) =>
+      els.push(
+        <Circle key={`t${i}`} cx={t.x * Z} cy={t.y * Z} r={t.r * Z * 0.82} fill={theme.tree} stroke={theme.treeRing} strokeWidth={1} />
+      )
+    );
+    return els;
   }
   return null;
 }
@@ -153,6 +292,7 @@ export default function RouteMap({ hike, steps }) {
   );
 
   const stars = useMemo(() => (theme.stars ? makeStars(seed) : []), [hike.id, theme.stars]);
+  const skyStars = useMemo(() => (theme.dayNight ? makeStars(seed, 70) : []), [hike.id, theme.dayNight]);
   const scenery = useMemo(() => buildScenery(theme, loop, seed), [hike.id]);
   const loopEl = useMemo(
     () => (
@@ -181,6 +321,11 @@ export default function RouteMap({ hike, steps }) {
 
   const overallProgress = Math.min(1, steps / hike.steps);
 
+  const sky = theme.dayNight ? skyState(steps) : null;
+  const horizon = size.h * 0.42;
+  const celX = size.w * (0.12 + 0.76 * (sky ? sky.sp : 0));
+  const celY = horizon - Math.sin((sky ? sky.sp : 0) * Math.PI) * size.h * 0.22;
+
   return (
     <View
       style={[styles.fill, { backgroundColor: theme.bg }]}
@@ -195,6 +340,25 @@ export default function RouteMap({ hike, steps }) {
             {scenery}
             {loopEl}
           </G>
+
+          {sky && (
+            <>
+              <Rect x={0} y={0} width={size.w} height={size.h} fill={sky.overlay} />
+              {sky.night > 0.03 &&
+                skyStars.map((s, i) => (
+                  <Circle
+                    key={`ns${i}`}
+                    cx={s.x * size.w}
+                    cy={s.y * size.h * 0.5}
+                    r={s.r}
+                    fill={`rgba(255,255,255,${(sky.night * 0.9).toFixed(2)})`}
+                  />
+                ))}
+              <Circle cx={celX} cy={celY} r={sky.isMoon ? 16 : 20} fill={sky.isMoon ? 'rgba(220,230,255,0.18)' : 'rgba(255,221,107,0.28)'} />
+              <Circle cx={celX} cy={celY} r={sky.isMoon ? 10 : 13} fill={sky.isMoon ? '#eef2ff' : '#ffdf6b'} />
+            </>
+          )}
+
           {/* Pin stays centered; the world scrolls beneath it. */}
           <Circle cx={cx} cy={cy} r={12} fill={theme.traveled} opacity={0.22} />
           <Circle cx={cx} cy={cy} r={6.5} fill={theme.pin} stroke="#fff" strokeWidth={2} />

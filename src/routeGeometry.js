@@ -216,6 +216,68 @@ export function makeLoopRoute(kind, seed) {
   return pts;
 }
 
+// A closed, slightly irregular ring — used for topographic mountain contours.
+export function wobblyRing(cx, cy, R, rand, M = 20, amp = 0.16) {
+  const p1 = rand() * 6.283;
+  const p2 = rand() * 6.283;
+  const pts = [];
+  for (let k = 0; k < M; k++) {
+    const a = (2 * Math.PI * k) / M;
+    const rr = R * (1 + amp * Math.sin(2 * a + p1) + amp * 0.6 * Math.sin(3 * a + p2));
+    pts.push({ x: cx + Math.cos(a) * rr, y: cy + Math.sin(a) * rr });
+  }
+  pts.push({ ...pts[0] });
+  return pts;
+}
+
+// Mountain peaks scattered in and around the route's bounding area. Each peak
+// is drawn as concentric contour rings (topographic style) by the renderer.
+export function makeMountains(seed, b, n = 6) {
+  const rand = seededRand(seed ^ 0xa53f1);
+  const padX = (b.maxX - b.minX) * 0.55 + 10;
+  const padY = (b.maxY - b.minY) * 0.55 + 10;
+  const peaks = [];
+  for (let i = 0; i < n; i++) {
+    peaks.push({
+      cx: b.minX - padX + rand() * (b.maxX - b.minX + 2 * padX),
+      cy: b.minY - padY + rand() * (b.maxY - b.minY + 2 * padY),
+      R: 9 + rand() * 8,
+      seed: Math.floor(rand() * 1e9) + 1,
+    });
+  }
+  return peaks;
+}
+
+// A straight river band across the area, plus the points where the loop path
+// crosses it (so the renderer can drop a bridge there).
+export function makeRiver(seed, loopBuilt) {
+  const rand = seededRand(seed ^ 0x9e7d);
+  const b = bounds(loopBuilt.points);
+  const cx = (b.minX + b.maxX) / 2;
+  const cy = (b.minY + b.maxY) / 2;
+  const angle = Math.PI / 4 + (rand() - 0.5) * 0.7;
+  const dir = { x: Math.cos(angle), y: Math.sin(angle) };
+  const N = { x: -dir.y, y: dir.x };
+  const width = 3.0;
+  const pts = loopBuilt.points;
+  const crossings = [];
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1];
+    const c = pts[i];
+    const da = (a.x - cx) * N.x + (a.y - cy) * N.y;
+    const db = (c.x - cx) * N.x + (c.y - cy) * N.y;
+    if (da * db < 0) {
+      const t = da / (da - db);
+      crossings.push({
+        x: a.x + (c.x - a.x) * t,
+        y: a.y + (c.y - a.y) * t,
+        ang: Math.atan2(c.y - a.y, c.x - a.x),
+      });
+    }
+  }
+  return { cx, cy, dir, N, angle, width, crossings, bbox: b };
+}
+
 // Trees scattered through the route's bounding area.
 export function makeTrailScenery(seed, built, n = 110) {
   const rand = seededRand(seed ^ 0x27d4eb2f);
