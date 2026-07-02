@@ -25,6 +25,31 @@ const BREATHER_MS = 2000;
 const BREATHER_MSG_SWITCH_MS = 1000;
 // How quickly the pin eases toward its true position each frame (0..1).
 const PIN_EASE = 0.18;
+// Assumed starting pace (ms per step) before we've measured yours, so an ETA
+// shows immediately. Refined from your real cadence as you walk.
+const DEFAULT_PACE_MS = 520;
+
+// Turn a number of seconds into "6 years, 3 months, 2 days" (top 3 units).
+function formatDuration(sec) {
+  if (!isFinite(sec) || sec <= 0) return null;
+  const units = [
+    ['year', 31557600],
+    ['month', 2629800],
+    ['day', 86400],
+    ['hour', 3600],
+    ['minute', 60],
+    ['second', 1],
+  ];
+  let rem = Math.floor(sec);
+  const parts = [];
+  for (const [name, s] of units) {
+    const v = Math.floor(rem / s);
+    rem -= v * s;
+    if (v > 0) parts.push(`${v} ${name}${v === 1 ? '' : 's'}`);
+  }
+  if (parts.length === 0) return 'less than a second';
+  return parts.slice(0, 3).join(', ');
+}
 
 // Build tag, baked in at deploy time so you can tell which release is live.
 // (EXPO_PUBLIC_* vars are inlined by Expo at build; undefined in local dev.)
@@ -86,6 +111,8 @@ function WalkingView({ hike, onBack }) {
   const [done, setDone] = useState(false);
   const [invalidFlash, setInvalidFlash] = useState(false);
   const [blocked, setBlocked] = useState(false);
+  // Smoothed pace (ms per step) used to estimate time remaining.
+  const [paceMs, setPaceMs] = useState(DEFAULT_PACE_MS);
   // Eased step count that the map follows smoothly (advances the nav view a
   // fixed distance per step, independent of the hike's total length).
   const [displayedSteps, setDisplayedSteps] = useState(0);
@@ -180,6 +207,11 @@ function WalkingView({ hike, onBack }) {
           return;
         }
 
+        // Refine the pace estimate from real cadence (EMA smoothed).
+        if (samples > 0 && isFinite(avg)) {
+          setPaceMs((prev) => prev * 0.6 + avg * 0.4);
+        }
+
         const newSteps = stepsRef.current + 1;
         stepsRef.current = newSteps;
         const newFoot = nextFootRef.current === 'left' ? 'right' : 'left';
@@ -243,6 +275,8 @@ function WalkingView({ hike, onBack }) {
   ).current;
 
   const pct = Math.min((steps / hike.steps) * 100, 100);
+  const remainingSteps = Math.max(0, hike.steps - steps);
+  const etaText = formatDuration((remainingSteps * paceMs) / 1000);
 
   if (done) {
     return (
@@ -260,6 +294,7 @@ function WalkingView({ hike, onBack }) {
           if (breatherMsgTimerRef.current) clearTimeout(breatherMsgTimerRef.current);
           setBlocked(false);
           setDisplayedSteps(0);
+          setPaceMs(DEFAULT_PACE_MS);
           setSteps(0);
           setNextFoot('left');
           setFeedback('start walking');
@@ -284,6 +319,9 @@ function WalkingView({ hike, onBack }) {
             {formatSteps(steps)} / {formatSteps(hike.steps)} steps
           </Text>
           <Text style={styles.pctLabel}>{pct.toFixed(1)}% complete</Text>
+          {remainingSteps > 0 && etaText && (
+            <Text style={styles.etaLabel}>≈ {etaText} to go at this pace</Text>
+          )}
           <View style={styles.progressBarOuter}>
             <View style={[styles.progressBarInner, { width: pct + '%' }]} />
           </View>
@@ -417,6 +455,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#555',
     marginTop: 2,
+  },
+  etaLabel: {
+    fontSize: 12,
+    color: '#8a7a55',
+    fontWeight: '600',
+    marginTop: 3,
     marginBottom: 10,
   },
   progressBarOuter: {
