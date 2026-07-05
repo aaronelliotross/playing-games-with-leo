@@ -1,6 +1,6 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { View, StyleSheet } from 'react-native';
-import Svg, { Polyline, Polygon, Circle, G, Rect } from 'react-native-svg';
+import Svg, { Polyline, Polygon, Circle, G, Rect, Defs, Pattern, Line, Path, Ellipse, Text } from 'react-native-svg';
 import {
   hashId,
   CITY_BLOCK,
@@ -69,6 +69,9 @@ function skyState(steps) {
     sp,
   };
 }
+
+// Manga ink for bold outlines everywhere.
+const INK = '#1b1a17';
 
 const BUILDING_SHADES = ['#9aa6b2', '#8e99a6', '#a8a594', '#b3a892', '#9fa894', '#8f9bb0'];
 
@@ -147,16 +150,16 @@ function sceneryLayers(theme, seed, rect) {
   if (theme.kind === 'city') {
     const { buildings, parks } = cityInRect(seed, rect);
     parks.forEach((p) =>
-      back.push(<Rect key={p.key} x={p.x * Z} y={p.y * Z} width={p.w * Z} height={p.h * Z} rx={2} fill={theme.park} />)
+      back.push(<Rect key={p.key} x={p.x * Z} y={p.y * Z} width={p.w * Z} height={p.h * Z} rx={2} fill={theme.park} stroke={INK} strokeWidth={1.2} />)
     );
     buildings.forEach((b) =>
       back.push(
-        <Rect key={b.key} x={b.x * Z} y={b.y * Z} width={b.w * Z} height={b.h * Z} fill={BUILDING_SHADES[b.shade]} stroke={theme.buildingStroke} strokeWidth={1} />
+        <Rect key={b.key} x={b.x * Z} y={b.y * Z} width={b.w * Z} height={b.h * Z} fill={BUILDING_SHADES[b.shade]} stroke={INK} strokeWidth={1.6} />
       )
     );
   } else if (theme.kind === 'trail') {
     treesInRect(seed, rect).forEach((t) =>
-      front.push(<Circle key={t.key} cx={t.x * Z} cy={t.y * Z} r={t.r * Z} fill={theme.tree} stroke={theme.treeRing} strokeWidth={1} />)
+      front.push(<Circle key={t.key} cx={t.x * Z} cy={t.y * Z} r={t.r * Z} fill={theme.tree} stroke={INK} strokeWidth={1.8} />)
     );
   } else if (theme.kind === 'appalachian') {
     mountainsInRect(seed, rect).forEach((pk) => {
@@ -167,14 +170,14 @@ function sceneryLayers(theme, seed, rect) {
             key={`${pk.key}-${bi}`}
             points={ptsToStr(wobblyRing(pk.cx, pk.cy, pk.R * band.f, r), Z)}
             fill={band.fill}
-            stroke={bi === 0 ? MTN_STROKE : undefined}
-            strokeWidth={bi === 0 ? 1.5 : undefined}
+            stroke={bi === 0 ? INK : undefined}
+            strokeWidth={bi === 0 ? 2.4 : undefined}
           />
         )
       );
     });
     treesInRect(seed, rect, 3, 0.45).forEach((t) =>
-      front.push(<Circle key={t.key} cx={t.x * Z} cy={t.y * Z} r={t.r * Z * 0.82} fill={theme.tree} stroke={theme.treeRing} strokeWidth={1} />)
+      front.push(<Circle key={t.key} cx={t.x * Z} cy={t.y * Z} r={t.r * Z * 0.82} fill={theme.tree} stroke={INK} strokeWidth={1.8} />)
     );
   }
   return { back, front };
@@ -188,18 +191,56 @@ function riverEls(theme, seed, rect, world, arc, behindWorld, aheadWorld) {
   const w = 3;
   return riversInView(seed, world, arc, behindWorld, aheadWorld, 30).map((rv) => (
     <React.Fragment key={rv.key}>
-      <Rect x={minX * Z} y={(rv.level - w / 2) * Z} width={(maxX - minX) * Z} height={w * Z} fill={theme.river} stroke={theme.riverEdge} strokeWidth={1.2} />
+      <Rect x={minX * Z} y={(rv.level - w / 2) * Z} width={(maxX - minX) * Z} height={w * Z} fill={theme.river} stroke={INK} strokeWidth={1.6} />
       {rv.cross && (
-        <Rect x={(rv.cross.x - 1.1) * Z} y={(rv.level - (w / 2 + 1.2)) * Z} width={2.2 * Z} height={(w + 2.4) * Z} rx={1} fill={theme.bridge} stroke="#5e4329" strokeWidth={1} />
+        <Rect x={(rv.cross.x - 1.1) * Z} y={(rv.level - (w / 2 + 1.2)) * Z} width={2.2 * Z} height={(w + 2.4) * Z} rx={1} fill={theme.bridge} stroke={INK} strokeWidth={1.4} />
       )}
     </React.Fragment>
   ));
 }
 
+// A little chibi hiker at screen center. Legs alternate with the step parity
+// (pose), and it reacts to the breather with a sweat drop.
+function Avatar({ cx, cy, pose, blocked }) {
+  const bob = blocked ? 0 : pose ? -1.6 : 0;
+  const gy = cy + bob;
+  const frontX = pose ? cx + 3 : cx - 3;
+  const backX = pose ? cx - 3 : cx + 3;
+  return (
+    <G>
+      <Ellipse cx={cx} cy={cy + 2} rx={9} ry={2.6} fill="rgba(0,0,0,0.2)" />
+      {blocked ? (
+        <>
+          <Rect x={cx - 4.6} y={gy - 9} width={3.4} height={9} rx={1.5} fill="#33425c" stroke={INK} strokeWidth={1.6} />
+          <Rect x={cx + 1.2} y={gy - 9} width={3.4} height={9} rx={1.5} fill="#33425c" stroke={INK} strokeWidth={1.6} />
+        </>
+      ) : (
+        <>
+          <Rect x={backX - 1.7} y={gy - 8} width={3.4} height={8} rx={1.5} fill="#2c3a52" stroke={INK} strokeWidth={1.6} />
+          <Rect x={frontX - 1.7} y={gy - 10} width={3.6} height={10} rx={1.6} fill="#3b4a63" stroke={INK} strokeWidth={1.6} />
+        </>
+      )}
+      {/* arms */}
+      <Rect x={cx - 8.6} y={gy - 19} width={3} height={7} rx={1.4} fill="#e2574c" stroke={INK} strokeWidth={1.4} />
+      <Rect x={cx + 5.6} y={gy - 19} width={3} height={7} rx={1.4} fill="#e2574c" stroke={INK} strokeWidth={1.4} />
+      {/* body */}
+      <Rect x={cx - 6.5} y={gy - 20} width={13} height={13} rx={3.5} fill="#e2574c" stroke={INK} strokeWidth={2} />
+      {/* head + cap + face */}
+      <Circle cx={cx} cy={gy - 27} r={7} fill="#ffe0bd" stroke={INK} strokeWidth={2} />
+      <Path d={`M ${cx - 7} ${gy - 27} a 7 7 0 0 1 14 0 z`} fill="#c9433a" stroke={INK} strokeWidth={1.8} />
+      <Circle cx={cx - 2.6} cy={gy - 26} r={1.2} fill={INK} />
+      <Circle cx={cx + 2.6} cy={gy - 26} r={1.2} fill={INK} />
+      {blocked && (
+        <Path d={`M ${cx + 8.5} ${gy - 30} q 2.6 3.2 0 5.2 q -2.6 -2 0 -5.2 z`} fill="#8fd0ff" stroke={INK} strokeWidth={1} />
+      )}
+    </G>
+  );
+}
+
 // World distance we invalidate the tile cache at (pin movement between rebuilds).
 const CHUNK = 6;
 
-export default function RouteMap({ hike, steps }) {
+export default function RouteMap({ hike, steps, moving, blocked }) {
   const [size, setSize] = useState({ w: 0, h: 0 });
   const seed = useMemo(() => hashId(hike.id), [hike.id]);
   const theme = useMemo(() => themeFor(hike), [hike.id]);
@@ -267,6 +308,11 @@ export default function RouteMap({ hike, steps }) {
     >
       {size.w > 0 && (
         <Svg width={size.w} height={size.h}>
+          <Defs>
+            <Pattern id="tone" width={5} height={5} patternUnits="userSpaceOnUse">
+              <Circle cx={1} cy={1} r={0.9} fill="rgba(0,0,0,0.55)" />
+            </Pattern>
+          </Defs>
           {stars.map((s, i) => (
             <Circle key={i} cx={s.x * size.w} cy={s.y * size.h} r={s.r} fill="rgba(255,255,255,0.7)" />
           ))}
@@ -274,6 +320,9 @@ export default function RouteMap({ hike, steps }) {
             {scenery.back}
             {rivers}
             {scenery.front}
+            {theme.kind !== 'city' && (
+              <Polyline points={pathStr} fill="none" stroke={INK} strokeWidth={8} strokeLinecap="round" strokeLinejoin="round" />
+            )}
             <Polyline
               points={pathStr}
               fill="none"
@@ -282,7 +331,7 @@ export default function RouteMap({ hike, steps }) {
               strokeDasharray={theme.kind === 'city' ? '7 5' : undefined}
               strokeLinecap="round"
               strokeLinejoin="round"
-              opacity={0.9}
+              opacity={0.95}
             />
           </G>
 
@@ -304,9 +353,35 @@ export default function RouteMap({ hike, steps }) {
             </>
           )}
 
-          {/* Pin stays centered; the world scrolls beneath it. */}
-          <Circle cx={cx} cy={cy} r={12} fill={theme.traveled} opacity={0.22} />
-          <Circle cx={cx} cy={cy} r={6.5} fill={theme.pin} stroke="#fff" strokeWidth={2} />
+          {/* Screentone print texture (subtle). */}
+          <Rect x={0} y={0} width={size.w} height={size.h} fill="url(#tone)" opacity={0.06} />
+
+          {/* Speed lines while walking. */}
+          {moving && !blocked && (
+            <>
+              {[0, 1, 2, 3].map((i) => (
+                <Line key={`sl${i}`} x1={0} y1={cy - 40 + i * 26} x2={30 + (i % 2) * 16} y2={cy - 40 + i * 26} stroke={INK} strokeWidth={2.4} opacity={0.5} />
+              ))}
+              {[0, 1, 2, 3].map((i) => (
+                <Line key={`sr${i}`} x1={size.w} y1={cy - 40 + i * 26} x2={size.w - (30 + (i % 2) * 16)} y2={cy - 40 + i * 26} stroke={INK} strokeWidth={2.4} opacity={0.5} />
+              ))}
+            </>
+          )}
+
+          {/* The hiker. */}
+          <Avatar cx={cx} cy={cy} pose={Math.round(steps) % 2 === 1} blocked={blocked} />
+
+          {/* SFX text. */}
+          {blocked ? (
+            <Text x={cx + 22} y={cy - 30} fill={INK} fontSize={13} fontWeight="bold" fontStyle="italic">haah…</Text>
+          ) : moving ? (
+            <Text x={cx + 18} y={cy - 26} fill={INK} fontSize={12} fontWeight="bold" fontStyle="italic">
+              {Math.round(steps) % 2 === 1 ? 'tmp!' : 'tmp'}
+            </Text>
+          ) : null}
+
+          {/* Manga panel frame. */}
+          <Rect x={3} y={3} width={size.w - 6} height={size.h - 6} rx={6} fill="none" stroke={INK} strokeWidth={4} />
         </Svg>
       )}
     </View>

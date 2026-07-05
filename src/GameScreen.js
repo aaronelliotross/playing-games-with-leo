@@ -113,6 +113,9 @@ function WalkingView({ hike, onBack }) {
   const [done, setDone] = useState(false);
   const [invalidFlash, setInvalidFlash] = useState(false);
   const [blocked, setBlocked] = useState(false);
+  // True briefly after each step, for speed lines / SFX on the avatar.
+  const [moving, setMoving] = useState(false);
+  const movingTimerRef = useRef(null);
   // Smoothed pace (ms per step) used to estimate time remaining.
   const [paceMs, setPaceMs] = useState(DEFAULT_PACE_MS);
   // Eased step count that the map follows smoothly (advances the nav view a
@@ -179,6 +182,7 @@ function WalkingView({ hike, onBack }) {
   const startBreather = useCallback(() => {
     blockedRef.current = true;
     setBlocked(true);
+    setMoving(false);
     setFeedback('No running!');
     if (breatherMsgTimerRef.current) clearTimeout(breatherMsgTimerRef.current);
     breatherMsgTimerRef.current = setTimeout(
@@ -222,6 +226,9 @@ function WalkingView({ hike, onBack }) {
         setSteps(newSteps);
         setNextFoot(newFoot);
         setFeedback(side === 'left' ? 'left foot' : 'right foot');
+        setMoving(true);
+        if (movingTimerRef.current) clearTimeout(movingTimerRef.current);
+        movingTimerRef.current = setTimeout(() => setMoving(false), 360);
 
         if (newSteps >= hike.steps) {
           setDone(true);
@@ -245,6 +252,7 @@ function WalkingView({ hike, onBack }) {
       if (invalidTimerRef.current) clearTimeout(invalidTimerRef.current);
       if (breatherTimerRef.current) clearTimeout(breatherTimerRef.current);
       if (breatherMsgTimerRef.current) clearTimeout(breatherMsgTimerRef.current);
+      if (movingTimerRef.current) clearTimeout(movingTimerRef.current);
     };
   }, []);
 
@@ -309,7 +317,7 @@ function WalkingView({ hike, onBack }) {
 
   return (
     <View style={styles.walkingRoot}>
-      <RouteMap hike={hike} steps={displayedSteps} />
+      <RouteMap hike={hike} steps={displayedSteps} moving={moving} blocked={blocked} />
 
       <SafeAreaView style={styles.walkingOverlay} {...panResponder.panHandlers}>
         <View style={styles.topPanel}>
