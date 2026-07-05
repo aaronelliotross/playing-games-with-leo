@@ -8,6 +8,8 @@ import {
   FlatList,
   TouchableOpacity,
   SafeAreaView,
+  Platform,
+  BackHandler,
 } from 'react-native';
 import RouteMap from './RouteMap';
 import { HIKES } from './hikeData';
@@ -318,10 +320,9 @@ function WalkingView({ hike, onBack }) {
           <Text style={styles.stepCount}>
             {formatSteps(steps)} / {formatSteps(hike.steps)} steps
           </Text>
-          <Text style={styles.pctLabel}>{pct.toFixed(1)}% complete</Text>
-          {remainingSteps > 0 && etaText && (
-            <Text style={styles.etaLabel}>≈ {etaText} to go at this pace</Text>
-          )}
+          <Text style={styles.etaLabel}>
+            {remainingSteps > 0 ? (etaText ? `≈ ${etaText} left` : '…') : 'complete!'}
+          </Text>
           <View style={styles.progressBarOuter}>
             <View style={[styles.progressBarInner, { width: pct + '%' }]} />
           </View>
@@ -361,14 +362,56 @@ function WalkingView({ hike, onBack }) {
   );
 }
 
+const isWeb = Platform.OS === 'web' && typeof window !== 'undefined';
+
 export default function GameScreen() {
   const [currentHike, setCurrentHike] = useState(null);
+  const currentHikeRef = useRef(null);
+  currentHikeRef.current = currentHike;
+
+  // Entering a hike pushes a history entry so the browser/hardware back button
+  // returns to the hike list instead of leaving the page.
+  const enterHike = useCallback((hike) => {
+    if (isWeb) window.history.pushState({ screen: 'walk' }, '');
+    setCurrentHike(hike);
+  }, []);
+
+  const leaveHike = useCallback(() => {
+    // On web, go back through history (fires popstate, which clears the hike);
+    // this keeps our in-app back button and the browser back button in sync.
+    if (isWeb && window.history.state && window.history.state.screen === 'walk') {
+      window.history.back();
+    } else {
+      setCurrentHike(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isWeb) return;
+    const onPop = () => {
+      if (currentHikeRef.current) setCurrentHike(null);
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (currentHikeRef.current) {
+        setCurrentHike(null);
+        return true;
+      }
+      return false;
+    });
+    return () => sub.remove();
+  }, []);
 
   if (!currentHike) {
-    return <HikeSelector onSelect={setCurrentHike} />;
+    return <HikeSelector onSelect={enterHike} />;
   }
 
-  return <WalkingView hike={currentHike} onBack={() => setCurrentHike(null)} />;
+  return <WalkingView hike={currentHike} onBack={leaveHike} />;
 }
 
 const styles = StyleSheet.create({
@@ -457,10 +500,10 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   etaLabel: {
-    fontSize: 12,
-    color: '#8a7a55',
+    fontSize: 14,
+    color: '#6f5f3d',
     fontWeight: '600',
-    marginTop: 3,
+    marginTop: 4,
     marginBottom: 10,
   },
   progressBarOuter: {
