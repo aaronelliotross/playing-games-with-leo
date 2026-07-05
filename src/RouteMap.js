@@ -3,13 +3,7 @@ import { View, StyleSheet } from 'react-native';
 import Svg, { Polyline, Polygon, Circle, G, Rect } from 'react-native-svg';
 import {
   hashId,
-  makeRoute,
-  makeCityRoute,
   CITY_BLOCK,
-  buildPath,
-  pointAt,
-  sliceTo,
-  bounds,
   makeStars,
   wobblyRing,
 } from './routeGeometry';
@@ -21,7 +15,6 @@ import {
   cityInRect,
   riversInView,
 } from './endlessWorld';
-import { AT_SHAPE } from './atShape';
 
 const seededRand = (seed) => {
   let s = seed % 2147483647;
@@ -75,12 +68,6 @@ function skyState(steps) {
     isMoon,
     sp,
   };
-}
-
-// Whole-route overview inset size (portrait for the tall AT shape).
-const OVERVIEW_PAD = 10;
-function overviewSize(kind) {
-  return kind === 'appalachian' ? { w: 88, h: 128 } : { w: 116, h: 84 };
 }
 
 const BUILDING_SHADES = ['#9aa6b2', '#8e99a6', '#a8a594', '#b3a892', '#9fa894', '#8f9bb0'];
@@ -209,31 +196,6 @@ function riverEls(theme, seed, rect, world, arc, behindWorld, aheadWorld) {
   ));
 }
 
-// Whole-journey minimap with the pin at the true overall fraction.
-function Overview({ built, progress, theme }) {
-  const { w: OW, h: OH } = overviewSize(theme.kind);
-  const b = useMemo(() => bounds(built.points), [built]);
-  const spanX = b.maxX - b.minX || 1;
-  const spanY = b.maxY - b.minY || 1;
-  const scale = Math.min((OW - 2 * OVERVIEW_PAD) / spanX, (OH - 2 * OVERVIEW_PAD) / spanY);
-  const offX = (OW - spanX * scale) / 2 - b.minX * scale;
-  const offY = (OH - spanY * scale) / 2 - b.minY * scale;
-
-  const all = useMemo(() => toPolyline(built.points, scale, offX, offY), [built, scale, offX, offY]);
-  const traveled = toPolyline(sliceTo(built, progress), scale, offX, offY);
-  const pin = pointAt(built, progress);
-
-  return (
-    <View style={[styles.overview, { width: OW + 8, height: OH + 8 }]}>
-      <Svg width={OW} height={OH}>
-        <Polyline points={all} fill="none" stroke="#8d8a80" strokeWidth={1.6} strokeLinejoin="round" strokeLinecap="round" />
-        <Polyline points={traveled} fill="none" stroke={theme.traveled} strokeWidth={2.4} strokeLinejoin="round" strokeLinecap="round" />
-        <Circle cx={offX + pin.x * scale} cy={offY + pin.y * scale} r={3.4} fill={theme.pin} stroke="#fff" strokeWidth={1.2} />
-      </Svg>
-    </View>
-  );
-}
-
 // World distance we invalidate the tile cache at (pin movement between rebuilds).
 const CHUNK = 6;
 
@@ -252,13 +214,6 @@ export default function RouteMap({ hike, steps }) {
     };
   }
   const world = worldRef.current.world;
-
-  // Whole-journey route drives the overview inset (true overall progress).
-  // The Appalachian Trail uses its real centerline shape.
-  const journey = useMemo(() => {
-    if (theme.kind === 'appalachian') return buildPath(AT_SHAPE.map((p) => ({ ...p })));
-    return buildPath(theme.kind === 'city' ? makeCityRoute(seed) : makeRoute(seed));
-  }, [hike.id]);
 
   const stars = useMemo(() => (theme.stars ? makeStars(seed) : []), [hike.id, theme.stars]);
   const skyStars = useMemo(() => (theme.dayNight ? makeStars(seed, 70) : []), [hike.id, theme.dayNight]);
@@ -299,8 +254,6 @@ export default function RouteMap({ hike, steps }) {
   const rivers = theme.kind === 'appalachian' && size.w > 0
     ? riverEls(theme, seed, [pin.x - halfWWorld, 0, pin.x + halfWWorld], world, localArc, behindWorld, aheadWorld)
     : null;
-
-  const overallProgress = Math.min(1, steps / hike.steps);
 
   const sky = theme.dayNight ? skyState(steps) : null;
   const horizon = size.h * 0.42;
@@ -356,7 +309,6 @@ export default function RouteMap({ hike, steps }) {
           <Circle cx={cx} cy={cy} r={6.5} fill={theme.pin} stroke="#fff" strokeWidth={2} />
         </Svg>
       )}
-      <Overview built={journey} progress={overallProgress} theme={theme} />
     </View>
   );
 }
@@ -364,15 +316,5 @@ export default function RouteMap({ hike, steps }) {
 const styles = StyleSheet.create({
   fill: {
     ...StyleSheet.absoluteFillObject,
-  },
-  overview: {
-    position: 'absolute',
-    bottom: 96,
-    right: 12,
-    padding: 4,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.18)',
-    backgroundColor: 'rgba(248,247,242,0.92)',
   },
 });
