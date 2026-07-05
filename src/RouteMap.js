@@ -1,22 +1,26 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { View, StyleSheet } from 'react-native';
 import Svg, { Polyline, Polygon, Circle, G, Rect } from 'react-native-svg';
 import {
   hashId,
   makeRoute,
   makeCityRoute,
-  makeLoopRoute,
+  CITY_BLOCK,
   buildPath,
   pointAt,
   sliceTo,
   bounds,
   makeStars,
-  makeCityScenery,
-  makeTrailScenery,
-  makeMountains,
-  makeRiver,
   wobblyRing,
 } from './routeGeometry';
+import {
+  createOrganicWorld,
+  createGridWorld,
+  treesInRect,
+  mountainsInRect,
+  cityInRect,
+  riversInView,
+} from './endlessWorld';
 import { AT_SHAPE } from './atShape';
 
 const seededRand = (seed) => {
@@ -146,107 +150,63 @@ function toPolyline(points, scale, ox = 0, oy = 0) {
     .join(' ');
 }
 
-// Static, world-space scenery, memoized by the caller so elements keep
-// referential identity across frames (only the parent <G> transform changes).
-function buildScenery(theme, loop, seed) {
+// Viewport scenery for the given world rect, split into back (behind the trail)
+// and front (in front of it) so rivers can be layered in between. Deterministic
+// per tile, so it never repeats and stays stable frame to frame.
+function sceneryLayers(theme, seed, rect) {
   const Z = theme.zoom;
+  const back = [];
+  const front = [];
   if (theme.kind === 'city') {
-    const { buildings, parks } = makeCityScenery(seed, loop);
-    const els = [];
-    parks.forEach((p, i) =>
-      els.push(
-        <Rect key={`pk${i}`} x={p.x * Z} y={p.y * Z} width={p.w * Z} height={p.h * Z} rx={2} fill={theme.park} />
+    const { buildings, parks } = cityInRect(seed, rect);
+    parks.forEach((p) =>
+      back.push(<Rect key={p.key} x={p.x * Z} y={p.y * Z} width={p.w * Z} height={p.h * Z} rx={2} fill={theme.park} />)
+    );
+    buildings.forEach((b) =>
+      back.push(
+        <Rect key={b.key} x={b.x * Z} y={b.y * Z} width={b.w * Z} height={b.h * Z} fill={BUILDING_SHADES[b.shade]} stroke={theme.buildingStroke} strokeWidth={1} />
       )
     );
-    buildings.forEach((b, i) =>
-      els.push(
-        <Rect
-          key={`b${i}`}
-          x={b.x * Z}
-          y={b.y * Z}
-          width={b.w * Z}
-          height={b.h * Z}
-          fill={BUILDING_SHADES[b.shade]}
-          stroke={theme.buildingStroke}
-          strokeWidth={1}
-        />
-      )
+  } else if (theme.kind === 'trail') {
+    treesInRect(seed, rect).forEach((t) =>
+      front.push(<Circle key={t.key} cx={t.x * Z} cy={t.y * Z} r={t.r * Z} fill={theme.tree} stroke={theme.treeRing} strokeWidth={1} />)
     );
-    return els;
-  }
-  if (theme.kind === 'trail') {
-    const { trees } = makeTrailScenery(seed, loop);
-    return trees.map((t, i) => (
-      <Circle key={`t${i}`} cx={t.x * Z} cy={t.y * Z} r={t.r * Z} fill={theme.tree} stroke={theme.treeRing} strokeWidth={1} />
-    ));
-  }
-  if (theme.kind === 'appalachian') {
-    const els = [];
-    const b = bounds(loop.points);
-
-    // Mountains (topographic contour bands), behind everything.
-    makeMountains(seed, b, 11).forEach((pk, pi) => {
+  } else if (theme.kind === 'appalachian') {
+    mountainsInRect(seed, rect).forEach((pk) => {
       const r = seededRand(pk.seed);
-      MTN_BANDS.forEach((band, bi) => {
-        els.push(
+      MTN_BANDS.forEach((band, bi) =>
+        back.push(
           <Polygon
-            key={`m${pi}-${bi}`}
+            key={`${pk.key}-${bi}`}
             points={ptsToStr(wobblyRing(pk.cx, pk.cy, pk.R * band.f, r), Z)}
             fill={band.fill}
             stroke={bi === 0 ? MTN_STROKE : undefined}
             strokeWidth={bi === 0 ? 1.5 : undefined}
           />
-        );
-      });
-    });
-
-    // River band crossing the area, with a bridge at each trail crossing.
-    const river = makeRiver(seed, loop);
-    const diag = Math.hypot(b.maxX - b.minX, b.maxY - b.minY) * 1.3 + 10;
-    const { cx, cy, dir, N, width } = river;
-    const corner = (s1, s2) => ({
-      x: cx + dir.x * s1 * (diag / 2) + N.x * s2 * (width / 2),
-      y: cy + dir.y * s1 * (diag / 2) + N.y * s2 * (width / 2),
-    });
-    els.push(
-      <Polygon
-        key="river"
-        points={ptsToStr([corner(1, 1), corner(1, -1), corner(-1, -1), corner(-1, 1)], Z)}
-        fill={theme.river}
-        stroke={theme.riverEdge}
-        strokeWidth={1.5}
-      />
-    );
-    river.crossings.forEach((cr, ci) => {
-      const u = { x: Math.cos(cr.ang), y: Math.sin(cr.ang) }; // along trail
-      const n = { x: -u.y, y: u.x };
-      const len = width + 1.8;
-      const th = 1.9;
-      const bc = (s1, s2) => ({
-        x: cr.x + u.x * s1 * (len / 2) + n.x * s2 * (th / 2),
-        y: cr.y + u.y * s1 * (len / 2) + n.y * s2 * (th / 2),
-      });
-      els.push(
-        <Polygon
-          key={`br${ci}`}
-          points={ptsToStr([bc(1, 1), bc(1, -1), bc(-1, -1), bc(-1, 1)], Z)}
-          fill={theme.bridge}
-          stroke="#5e4329"
-          strokeWidth={1}
-        />
+        )
       );
     });
-
-    // Forest on top — patchy enough to let the mountains show through.
-    const { trees } = makeTrailScenery(seed, loop, 150);
-    trees.forEach((t, i) =>
-      els.push(
-        <Circle key={`t${i}`} cx={t.x * Z} cy={t.y * Z} r={t.r * Z * 0.82} fill={theme.tree} stroke={theme.treeRing} strokeWidth={1} />
-      )
+    treesInRect(seed, rect, 3, 0.45).forEach((t) =>
+      front.push(<Circle key={t.key} cx={t.x * Z} cy={t.y * Z} r={t.r * Z * 0.82} fill={theme.tree} stroke={theme.treeRing} strokeWidth={1} />)
     );
-    return els;
   }
-  return null;
+  return { back, front };
+}
+
+// Rivers (appalachian): horizontal bands at fixed world levels with a bridge
+// where the forward-only trail crosses (exactly once, since it never doubles back).
+function riverEls(theme, seed, rect, world, arc, behindWorld, aheadWorld) {
+  const Z = theme.zoom;
+  const [minX, , maxX] = rect;
+  const w = 3;
+  return riversInView(seed, world, arc, behindWorld, aheadWorld, 30).map((rv) => (
+    <React.Fragment key={rv.key}>
+      <Rect x={minX * Z} y={(rv.level - w / 2) * Z} width={(maxX - minX) * Z} height={w * Z} fill={theme.river} stroke={theme.riverEdge} strokeWidth={1.2} />
+      {rv.cross && (
+        <Rect x={(rv.cross.x - 1.1) * Z} y={(rv.level - (w / 2 + 1.2)) * Z} width={2.2 * Z} height={(w + 2.4) * Z} rx={1} fill={theme.bridge} stroke="#5e4329" strokeWidth={1} />
+      )}
+    </React.Fragment>
+  ));
 }
 
 // Whole-journey minimap with the pin at the true overall fraction.
@@ -274,22 +234,8 @@ function Overview({ built, progress, theme }) {
   );
 }
 
-// A real stretch of the Appalachian Trail, recentered and scaled, used as the
-// open path the nav view walks (out-and-back). Real geometry, real bends.
-function atSectionPoints() {
-  const slice = AT_SHAPE.slice(90, 230);
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  slice.forEach((p) => {
-    minX = Math.min(minX, p.x);
-    minY = Math.min(minY, p.y);
-    maxX = Math.max(maxX, p.x);
-    maxY = Math.max(maxY, p.y);
-  });
-  const cx = (minX + maxX) / 2;
-  const cy = (minY + maxY) / 2;
-  const s = 58 / (Math.max(maxX - minX, maxY - minY) || 1);
-  return slice.map((p) => ({ x: (p.x - cx) * s, y: (p.y - cy) * s }));
-}
+// World distance we invalidate the tile cache at (pin movement between rebuilds).
+const CHUNK = 6;
 
 export default function RouteMap({ hike, steps }) {
   const [size, setSize] = useState({ w: 0, h: 0 });
@@ -297,12 +243,16 @@ export default function RouteMap({ hike, steps }) {
   const theme = useMemo(() => themeFor(hike), [hike.id]);
   const Z = theme.zoom;
 
-  // The zoomed nav view follows a local path, advancing a fixed distance per
-  // step. The AT traces a real trail section (out-and-back); others loop.
-  const localPath = useMemo(
-    () => buildPath(theme.kind === 'appalachian' ? atSectionPoints() : makeLoopRoute(theme.kind, seed)),
-    [hike.id]
-  );
+  // Endless, forward-only world for the nav view (never loops or doubles back).
+  const worldRef = useRef({ id: null, world: null });
+  if (worldRef.current.id !== hike.id) {
+    worldRef.current = {
+      id: hike.id,
+      world: theme.kind === 'city' ? createGridWorld(seed, CITY_BLOCK) : createOrganicWorld(seed),
+    };
+  }
+  const world = worldRef.current.world;
+
   // Whole-journey route drives the overview inset (true overall progress).
   // The Appalachian Trail uses its real centerline shape.
   const journey = useMemo(() => {
@@ -312,41 +262,43 @@ export default function RouteMap({ hike, steps }) {
 
   const stars = useMemo(() => (theme.stars ? makeStars(seed) : []), [hike.id, theme.stars]);
   const skyStars = useMemo(() => (theme.dayNight ? makeStars(seed, 70) : []), [hike.id, theme.dayNight]);
-  const scenery = useMemo(() => buildScenery(theme, localPath, seed), [hike.id]);
-  const loopEl = useMemo(
-    () => (
-      <Polyline
-        points={toPolyline(localPath.points, Z)}
-        fill="none"
-        stroke={theme.route}
-        strokeWidth={theme.kind === 'city' ? 4 : 5}
-        strokeDasharray={theme.kind === 'city' ? '7 5' : undefined}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        opacity={0.9}
-      />
-    ),
-    [hike.id]
-  );
 
-  // Position along the local path from the eased step count. The AT path is
-  // open, so ping-pong (out-and-back); loops just wrap.
+  // Advance along the endless path and center the pin.
   const localArc = steps * theme.stepWorld;
-  const L = localPath.total;
-  let frac = 0;
-  if (L > 0) {
-    if (theme.kind === 'appalachian') {
-      const ph = ((localArc % (2 * L)) + 2 * L) % (2 * L);
-      frac = (ph <= L ? ph : 2 * L - ph) / L;
-    } else {
-      frac = (localArc % L) / L;
-    }
-  }
-  const pin = pointAt(localPath, frac);
   const cx = size.w / 2;
-  const cy = size.h * 0.55;
+  const cy = size.h * 0.6;
+  const aheadWorld = size.h > 0 ? cy / Z + 8 : 8; // world distance visible ahead
+  const behindWorld = size.h > 0 ? (size.h - cy) / Z + 8 : 8;
+  world.extend(localArc + aheadWorld + 4);
+  const pin = world.sample(localArc);
   const tx = cx - pin.x * Z;
   const ty = cy - pin.y * Z;
+
+  // Windowed trail line.
+  const pathStr = size.w > 0
+    ? toPolyline(world.window(Math.max(0, localArc - behindWorld), localArc + aheadWorld), Z)
+    : '';
+
+  // Tile scenery, rebuilt only when the pin crosses into a new chunk.
+  const cellX = Math.floor(pin.x / CHUNK);
+  const cellY = Math.floor(pin.y / CHUNK);
+  const halfWWorld = size.w > 0 ? size.w / 2 / Z + CHUNK + 4 : 0;
+  const scenery = useMemo(() => {
+    if (size.w === 0) return { back: [], front: [] };
+    const rect = [
+      pin.x - halfWWorld,
+      pin.y - aheadWorld - CHUNK,
+      pin.x + halfWWorld,
+      pin.y + behindWorld + CHUNK,
+    ];
+    return sceneryLayers(theme, seed, rect);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hike.id, cellX, cellY, size.w, size.h]);
+
+  // Rivers are cheap and depend on exact arc, so compute per frame (AT only).
+  const rivers = theme.kind === 'appalachian' && size.w > 0
+    ? riverEls(theme, seed, [pin.x - halfWWorld, 0, pin.x + halfWWorld], world, localArc, behindWorld, aheadWorld)
+    : null;
 
   const overallProgress = Math.min(1, steps / hike.steps);
 
@@ -366,8 +318,19 @@ export default function RouteMap({ hike, steps }) {
             <Circle key={i} cx={s.x * size.w} cy={s.y * size.h} r={s.r} fill="rgba(255,255,255,0.7)" />
           ))}
           <G transform={`translate(${tx} ${ty})`}>
-            {scenery}
-            {loopEl}
+            {scenery.back}
+            {rivers}
+            {scenery.front}
+            <Polyline
+              points={pathStr}
+              fill="none"
+              stroke={theme.route}
+              strokeWidth={theme.kind === 'city' ? 4 : 5}
+              strokeDasharray={theme.kind === 'city' ? '7 5' : undefined}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              opacity={0.9}
+            />
           </G>
 
           {sky && (
