@@ -27,10 +27,10 @@ const seededRand = (seed) => {
 
 // Topographic contour bands for a mountain, forested base -> rocky summit.
 const MTN_BANDS = [
-  { f: 1.0, fill: '#46663a' },
-  { f: 0.74, fill: '#5d8047' },
-  { f: 0.5, fill: '#869a5d' },
-  { f: 0.28, fill: '#bcb085' },
+  { f: 1.0, fill: '#7f9159' },
+  { f: 0.74, fill: '#95a066' },
+  { f: 0.5, fill: '#b4b17e' },
+  { f: 0.28, fill: '#d6cf9d' },
 ];
 const MTN_STROKE = 'rgba(40,55,30,0.35)';
 
@@ -70,8 +70,8 @@ function skyState(steps) {
   };
 }
 
-// Manga ink for bold outlines everywhere.
-const INK = '#1b1a17';
+// Ink Wanderer — thin dark-teal ink outlines (Sable-style).
+const INK = '#2b4a52';
 
 const BUILDING_SHADES = ['#9aa6b2', '#8e99a6', '#a8a594', '#b3a892', '#9fa894', '#8f9bb0'];
 
@@ -80,11 +80,11 @@ const THEMES = {
     kind: 'trail',
     zoom: 13,
     stepWorld: 0.7, // route units advanced per step in the nav view
-    bg: '#dfe6cf',
-    route: '#b79a63',
-    traveled: '#8a6a39',
-    pin: '#5b4a25',
-    tree: '#5f8d4e',
+    bg: '#d9dab0',
+    route: '#c9903f',
+    traveled: '#a86f28',
+    pin: '#7a5a2a',
+    tree: '#7f9b62',
     treeRing: '#456b38',
   },
   city: {
@@ -112,22 +112,18 @@ const THEMES = {
     kind: 'appalachian',
     zoom: 13,
     stepWorld: 0.5,
-    bg: '#cdd9b8',
-    route: '#9c7b46',
-    traveled: '#6f5128',
-    pin: '#4a3a1d',
-    tree: '#4f7d3e',
+    bg: '#d4d6a2',
+    route: '#c9903f',
+    traveled: '#a86f28',
+    pin: '#7a5a2a',
+    tree: '#6f9455',
     treeRing: '#3a5e2c',
-    river: '#74a7c4',
+    river: '#a7cfcf',
     riverEdge: '#5b8aa6',
-    bridge: '#7a5a3a',
-    dayNight: true,
+    bridge: '#c9a86a',
   },
 };
 const THEME_BY_HIKE = {
-  corner_store: 'city',
-  around_the_block: 'city',
-  walk_to_the_moon: 'space',
   appalachian_trail: 'appalachian',
 };
 function themeFor(hike) {
@@ -308,80 +304,24 @@ export default function RouteMap({ hike, steps, moving, blocked }) {
     >
       {size.w > 0 && (
         <Svg width={size.w} height={size.h}>
-          <Defs>
-            <Pattern id="tone" width={5} height={5} patternUnits="userSpaceOnUse">
-              <Circle cx={1} cy={1} r={0.9} fill="rgba(0,0,0,0.55)" />
-            </Pattern>
-          </Defs>
-          {stars.map((s, i) => (
-            <Circle key={i} cx={s.x * size.w} cy={s.y * size.h} r={s.r} fill="rgba(255,255,255,0.7)" />
-          ))}
           <G transform={`translate(${tx} ${ty})`}>
             {scenery.back}
             {rivers}
             {scenery.front}
-            {theme.kind !== 'city' && (
-              <Polyline points={pathStr} fill="none" stroke={INK} strokeWidth={8} strokeLinecap="round" strokeLinejoin="round" />
-            )}
+            <Polyline points={pathStr} fill="none" stroke={INK} strokeWidth={6} strokeLinecap="round" strokeLinejoin="round" />
             <Polyline
               points={pathStr}
               fill="none"
               stroke={theme.route}
-              strokeWidth={theme.kind === 'city' ? 4 : 5}
-              strokeDasharray={theme.kind === 'city' ? '7 5' : undefined}
+              strokeWidth={4}
               strokeLinecap="round"
               strokeLinejoin="round"
               opacity={0.95}
             />
           </G>
 
-          {sky && (
-            <>
-              <Rect x={0} y={0} width={size.w} height={size.h} fill={sky.overlay} />
-              {sky.night > 0.03 &&
-                skyStars.map((s, i) => (
-                  <Circle
-                    key={`ns${i}`}
-                    cx={s.x * size.w}
-                    cy={s.y * size.h * 0.5}
-                    r={s.r}
-                    fill={`rgba(255,255,255,${(sky.night * 0.9).toFixed(2)})`}
-                  />
-                ))}
-              <Circle cx={celX} cy={celY} r={sky.isMoon ? 16 : 20} fill={sky.isMoon ? 'rgba(220,230,255,0.18)' : 'rgba(255,221,107,0.28)'} />
-              <Circle cx={celX} cy={celY} r={sky.isMoon ? 10 : 13} fill={sky.isMoon ? '#eef2ff' : '#ffdf6b'} />
-            </>
-          )}
-
-          {/* Screentone print texture (subtle). */}
-          <Rect x={0} y={0} width={size.w} height={size.h} fill="url(#tone)" opacity={0.06} />
-
-          {/* Speed lines while walking. */}
-          {moving && !blocked && (
-            <>
-              {[0, 1, 2, 3].map((i) => (
-                <Line key={`sl${i}`} x1={0} y1={cy - 40 + i * 26} x2={30 + (i % 2) * 16} y2={cy - 40 + i * 26} stroke={INK} strokeWidth={2.4} opacity={0.5} />
-              ))}
-              {[0, 1, 2, 3].map((i) => (
-                <Line key={`sr${i}`} x1={size.w} y1={cy - 40 + i * 26} x2={size.w - (30 + (i % 2) * 16)} y2={cy - 40 + i * 26} stroke={INK} strokeWidth={2.4} opacity={0.5} />
-              ))}
-            </>
-          )}
-
           {/* The hiker. */}
           <Avatar cx={cx} cy={cy} pose={Math.round(steps) % 2 === 1} blocked={blocked} />
-
-          {/* SFX text. */}
-          {blocked ? (
-            <Text x={cx + 22} y={cy - 30} fill={INK} fontSize={13} fontWeight="bold" fontStyle="italic">haah…</Text>
-          ) : moving ? (
-            <Text x={cx + 18} y={cy - 26} fill={INK} fontSize={12} fontWeight="bold" fontStyle="italic">
-              {Math.round(steps) % 2 === 1 ? 'tmp!' : 'tmp'}
-            </Text>
-          ) : null}
-
-          {/* Manga panel frame. */}
-          <Rect x={3} y={3} width={size.w - 6} height={size.h - 6} rx={6} fill="none" stroke={INK} strokeWidth={4} />
         </Svg>
       )}
     </View>
