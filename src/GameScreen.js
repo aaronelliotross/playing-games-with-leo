@@ -12,6 +12,7 @@ import {
   BackHandler,
 } from 'react-native';
 import RouteMap from './RouteMap';
+import SideWorld from './SideWorld';
 import { HIKES } from './hikeData';
 
 const SWIPE_THRESHOLD = 40;
@@ -287,6 +288,7 @@ function WalkingView({ hike, onBack }) {
   const pct = Math.min((steps / hike.steps) * 100, 100);
   const remainingSteps = Math.max(0, hike.steps - steps);
   const etaText = formatDuration((remainingSteps * paceMs) / 1000);
+  const darkHud = hike.style === 'silhouette' || hike.style === 'nocturne';
 
   if (done) {
     return (
@@ -317,39 +319,44 @@ function WalkingView({ hike, onBack }) {
 
   return (
     <View style={styles.walkingRoot}>
-      <RouteMap hike={hike} steps={displayedSteps} moving={moving} blocked={blocked} />
+      {hike.style === 'silhouette' || hike.style === 'nocturne' ? (
+        <SideWorld hike={hike} steps={displayedSteps} moving={moving} blocked={blocked} />
+      ) : (
+        <RouteMap hike={hike} steps={displayedSteps} moving={moving} blocked={blocked} />
+      )}
 
       <SafeAreaView style={styles.walkingOverlay} {...panResponder.panHandlers}>
-        <View style={styles.topPanel}>
+        <View style={[styles.topPanel, darkHud && styles.topPanelDark]}>
           <TouchableOpacity onPress={onBack}>
-            <Text style={styles.backLink}>← hikes</Text>
+            <Text style={[styles.backLink, darkHud && styles.textMutedDark]}>← hikes</Text>
           </TouchableOpacity>
-          <Text style={styles.walkingTitle}>{hike.name}</Text>
-          <Text style={styles.stepCount}>
+          <Text style={[styles.walkingTitle, darkHud && styles.textInkDark]}>{hike.name}</Text>
+          <Text style={[styles.stepCount, darkHud && styles.textInkDark]}>
             {formatSteps(steps)} / {formatSteps(hike.steps)} steps
           </Text>
-          <Text style={styles.etaLabel}>
+          <Text style={[styles.etaLabel, darkHud && styles.etaLabelDark]}>
             {remainingSteps > 0 ? (etaText ? `≈ ${etaText} left` : '…') : 'complete!'}
           </Text>
-          <View style={styles.progressBarOuter}>
-            <View style={[styles.progressBarInner, { width: pct + '%' }]} />
+          <View style={[styles.progressBarOuter, darkHud && styles.progressBarOuterDark]}>
+            <View style={[styles.progressBarInner, darkHud && styles.progressBarInnerDark, { width: pct + '%' }]} />
           </View>
         </View>
 
         <View style={styles.spacer} pointerEvents="none" />
 
-        <View style={styles.bottomBar} pointerEvents="none">
+        <View style={[styles.bottomBar, darkHud && styles.bottomBarDark]} pointerEvents="none">
           <View style={styles.footRow}>
-            <Text style={[styles.footZoneText, nextFoot === 'left' && styles.footZoneTextActive]}>
+            <Text style={[styles.footZoneText, darkHud && styles.footZoneTextDark, nextFoot === 'left' && (darkHud ? styles.footZoneTextActiveDark : styles.footZoneTextActive)]}>
               LEFT
             </Text>
-            <Text style={[styles.footZoneText, nextFoot === 'right' && styles.footZoneTextActive]}>
+            <Text style={[styles.footZoneText, darkHud && styles.footZoneTextDark, nextFoot === 'right' && (darkHud ? styles.footZoneTextActiveDark : styles.footZoneTextActive)]}>
               RIGHT
             </Text>
           </View>
           <Text
             style={[
               styles.feedback,
+              darkHud && styles.textInkDark,
               invalidFlash && styles.feedbackInvalid,
               blocked && styles.feedbackRunning,
             ]}
@@ -561,9 +568,26 @@ const styles = StyleSheet.create({
     color: '#999',
   },
   feedbackRunning: {
-    color: '#b8860b',
+    color: '#f0c14b',
     fontWeight: '700',
   },
+
+  // Dark HUD variants for the side-on (silhouette / nocturne) styles.
+  topPanelDark: {
+    backgroundColor: 'rgba(10,12,20,0.5)',
+    borderBottomColor: 'rgba(255,255,255,0.12)',
+  },
+  bottomBarDark: {
+    backgroundColor: 'rgba(10,12,20,0.5)',
+    borderTopColor: 'rgba(255,255,255,0.12)',
+  },
+  textInkDark: { color: '#f2f3f7' },
+  textMutedDark: { color: '#b7bdca' },
+  etaLabelDark: { color: '#e6cf95' },
+  progressBarOuterDark: { backgroundColor: 'rgba(255,255,255,0.18)' },
+  progressBarInnerDark: { backgroundColor: '#e6cf95' },
+  footZoneTextDark: { color: 'rgba(255,255,255,0.4)' },
+  footZoneTextActiveDark: { color: '#ffffff' },
   breatherOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0,0,0,0.6)',
