@@ -10,6 +10,8 @@ import {
   SafeAreaView,
   Platform,
   BackHandler,
+  Animated,
+  Easing,
 } from 'react-native';
 import RouteMap from './RouteMap';
 import SideWorld from './SideWorld';
@@ -104,6 +106,87 @@ function CompletionScreen({ hike, steps, onRestart, onChooseAnother }) {
         </TouchableOpacity>
       </View>
     </SafeAreaView>
+  );
+}
+
+// Ink used for the swipe trail — light on dark scenes, teal on the ink walks.
+function swipeInk(a, dark) {
+  return dark ? `rgba(255,255,255,${a})` : `rgba(43,74,82,${a})`;
+}
+
+function Chevron({ color }) {
+  return (
+    <View
+      style={{
+        width: 20,
+        height: 20,
+        borderRightWidth: 4,
+        borderBottomWidth: 4,
+        borderColor: color,
+        transform: [{ rotate: '45deg' }],
+        marginVertical: 3,
+      }}
+    />
+  );
+}
+
+// A gentle expanding ring where a swipe lifts: neutral for a step, red for a
+// same-foot slip, amber when it triggers the breather.
+function Ripple({ x, y, kind, darkHud, onDone }) {
+  const a = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(a, {
+      toValue: 1,
+      duration: kind === 'good' ? 420 : 520,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: true,
+    }).start(() => onDone && onDone());
+  }, []);
+  const color = kind === 'bad' ? '#e07a5f' : kind === 'warn' ? '#f0c14b' : darkHud ? 'rgba(255,255,255,0.9)' : 'rgba(43,74,82,0.85)';
+  const scale = a.interpolate({ inputRange: [0, 1], outputRange: [0.5, kind === 'bad' ? 1.9 : 2.4] });
+  const opacity = a.interpolate({ inputRange: [0, 1], outputRange: [0.6, 0] });
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={{ position: 'absolute', left: x - 26, top: y - 26, width: 52, height: 52, borderRadius: 26, borderWidth: 2.5, borderColor: color, opacity, transform: [{ scale }] }}
+    />
+  );
+}
+
+// Faint pulsing "swipe down" chevrons on each side, before the first step.
+function IdleHint({ darkHud }) {
+  const a = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(a, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+        Animated.timing(a, { toValue: 0, duration: 900, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, []);
+  const translateY = a.interpolate({ inputRange: [0, 1], outputRange: [-2, 16] });
+  const opacity = a.interpolate({ inputRange: [0, 1], outputRange: [0.45, 0.95] });
+  const color = darkHud ? 'rgba(255,255,255,0.95)' : 'rgba(43,74,82,0.95)';
+  const chip = darkHud ? 'rgba(0,0,0,0.3)' : 'rgba(255,255,255,0.4)';
+  const side = { width: '50%', alignItems: 'center' };
+  const pair = { alignItems: 'center', paddingVertical: 12, paddingHorizontal: 18, borderRadius: 22, backgroundColor: chip };
+  return (
+    <View style={{ position: 'absolute', top: '44%', left: 0, right: 0, flexDirection: 'row' }} pointerEvents="none">
+      <View style={side}>
+        <Animated.View style={[pair, { opacity, transform: [{ translateY }] }]}>
+          <Chevron color={color} />
+          <Chevron color={color} />
+        </Animated.View>
+      </View>
+      <View style={side}>
+        <Animated.View style={[pair, { opacity, transform: [{ translateY }] }]}>
+          <Chevron color={color} />
+          <Chevron color={color} />
+        </Animated.View>
+      </View>
+    </View>
   );
 }
 
@@ -203,7 +286,7 @@ function WalkingView({ hike, onBack }) {
   const handleStep = useCallback(
     (side) => {
       // During a breather, movement is frozen and steps are ignored.
-      if (blockedRef.current) return;
+      if (blockedRef.current) return 'blocked';
 
       if (side === nextFootRef.current) {
         const { avg, samples } = computePace();
@@ -211,7 +294,7 @@ function WalkingView({ hike, onBack }) {
         // Sustained fast cadence = running. Don't count the step; freeze instead.
         if (samples >= RUN_MIN_SAMPLES && avg < RUN_THRESHOLD_MS) {
           startBreather();
-          return;
+          return 'run';
         }
 
         // Refine the pace estimate from real cadence (EMA smoothed).
@@ -234,6 +317,7 @@ function WalkingView({ hike, onBack }) {
         if (newSteps >= hike.steps) {
           setDone(true);
         }
+        return 'step';
       } else {
         if (invalidTimerRef.current) clearTimeout(invalidTimerRef.current);
         setInvalidFlash(true);
@@ -242,6 +326,7 @@ function WalkingView({ hike, onBack }) {
           setInvalidFlash(false);
           setFeedback(nextFootRef.current + ' foot');
         }, 600);
+        return 'same';
       }
     },
     [hike.steps, computePace, startBreather]
@@ -258,6 +343,17 @@ function WalkingView({ hike, onBack }) {
   }, []);
 
   const startX = useRef(0);
+  // Live swipe trail + release pulses (visual feedback replacing the labels).
+  const [streak, setStreak] = useState(null); // { x, y0, y1 }
+  const [ripples, setRipples] = useState([]);
+  const rippleIdRef = useRef(0);
+  const addRipple = useCallback((x, y, kind) => {
+    const id = ++rippleIdRef.current;
+    setRipples((rs) => [...rs, { id, x, y, kind }]);
+  }, []);
+  const removeRipple = useCallback((id) => {
+    setRipples((rs) => rs.filter((r) => r.id !== id));
+  }, []);
 
   const panResponder = useRef(
     PanResponder.create({
@@ -265,12 +361,20 @@ function WalkingView({ hike, onBack }) {
       onMoveShouldSetPanResponder: () => false,
 
       onPanResponderGrant: (evt) => {
-        startX.current = evt.nativeEvent.locationX;
+        const { locationX, locationY } = evt.nativeEvent;
+        startX.current = locationX;
+        setStreak({ x: locationX, y0: locationY, y1: locationY });
+      },
+
+      onPanResponderMove: (evt) => {
+        const { locationX, locationY } = evt.nativeEvent;
+        setStreak((s) => (s ? { ...s, x: locationX, y1: locationY } : s));
       },
 
       onPanResponderRelease: (evt, gestureState) => {
         const { dx, dy } = gestureState;
         const releaseX = evt.nativeEvent.locationX;
+        const releaseY = evt.nativeEvent.locationY;
         const screenWidth = Dimensions.get('window').width;
 
         const startedLeft = startX.current < screenWidth / 2;
@@ -279,9 +383,14 @@ function WalkingView({ hike, onBack }) {
         const isDownSwipe = dy > SWIPE_THRESHOLD && Math.abs(dy) > Math.abs(dx) * 1.2;
 
         if (isDownSwipe && stayedOnSameHalf) {
-          handleStep(startedLeft ? 'left' : 'right');
+          const res = handleStep(startedLeft ? 'left' : 'right');
+          const kind = res === 'step' ? 'good' : res === 'same' ? 'bad' : res === 'run' ? 'warn' : null;
+          if (kind) addRipple(releaseX, releaseY, kind);
         }
+        setStreak(null);
       },
+
+      onPanResponderTerminate: () => setStreak(null),
     })
   ).current;
 
@@ -344,25 +453,28 @@ function WalkingView({ hike, onBack }) {
 
         <View style={styles.spacer} pointerEvents="none" />
 
-        <View style={[styles.bottomBar, darkHud && styles.bottomBarDark]} pointerEvents="none">
-          <View style={styles.footRow}>
-            <Text style={[styles.footZoneText, darkHud && styles.footZoneTextDark, nextFoot === 'left' && (darkHud ? styles.footZoneTextActiveDark : styles.footZoneTextActive)]}>
-              LEFT
-            </Text>
-            <Text style={[styles.footZoneText, darkHud && styles.footZoneTextDark, nextFoot === 'right' && (darkHud ? styles.footZoneTextActiveDark : styles.footZoneTextActive)]}>
-              RIGHT
-            </Text>
-          </View>
-          <Text
-            style={[
-              styles.feedback,
-              darkHud && styles.textInkDark,
-              invalidFlash && styles.feedbackInvalid,
-              blocked && styles.feedbackRunning,
-            ]}
-          >
-            {feedback}
-          </Text>
+        {/* Visual swipe feedback (replaces the LEFT/RIGHT labels + foot text). */}
+        <View style={StyleSheet.absoluteFill} pointerEvents="none">
+          {streak && streak.y1 > streak.y0 + 6 && (
+            <>
+              <View
+                style={[
+                  styles.streak,
+                  { left: streak.x - 3, top: streak.y0, height: streak.y1 - streak.y0, backgroundColor: swipeInk(0.22, darkHud) },
+                ]}
+              />
+              <View
+                style={[
+                  styles.streakDot,
+                  { left: streak.x - 10, top: streak.y1 - 10, backgroundColor: swipeInk(0.5, darkHud) },
+                ]}
+              />
+            </>
+          )}
+          {ripples.map((r) => (
+            <Ripple key={r.id} x={r.x} y={r.y} kind={r.kind} darkHud={darkHud} onDone={() => removeRipple(r.id)} />
+          ))}
+          {steps < 1 && !blocked && <IdleHint darkHud={darkHud} />}
         </View>
       </SafeAreaView>
 
@@ -534,6 +646,17 @@ const styles = StyleSheet.create({
 
   spacer: {
     flex: 1,
+  },
+  streak: {
+    position: 'absolute',
+    width: 6,
+    borderRadius: 3,
+  },
+  streakDot: {
+    position: 'absolute',
+    width: 20,
+    height: 20,
+    borderRadius: 10,
   },
   bottomBar: {
     backgroundColor: 'rgba(245,245,240,0.9)',
