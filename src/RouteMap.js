@@ -233,6 +233,48 @@ function Avatar({ cx, cy, pose, blocked }) {
   );
 }
 
+// A little dog trotting a bit ahead of the hiker, on a leash. Legs alternate
+// with the step parity so it trots along in time. Only shown on "Walk the Dog".
+function Dog({ cx, cy, pose, blocked }) {
+  const dx = cx - 20;      // a bit to the left...
+  const dy = cy - 20;      // ...and ahead of the hiker
+  const trot = blocked ? 0 : pose ? -1 : 0;
+  const gy = dy + trot;
+  // front + back legs swap forward/back with the pose
+  const legF = pose ? 4 : 2;
+  const legB = pose ? -4 : -2;
+  return (
+    <G>
+      {/* leash: from the hiker's leading hand down to the dog's neck */}
+      <Path
+        d={`M ${cx - 8} ${cy - 19} Q ${dx + 6} ${gy - 10} ${dx + 7} ${gy - 5}`}
+        fill="none"
+        stroke={INK}
+        strokeWidth={1.2}
+        opacity={0.7}
+      />
+      <Ellipse cx={dx} cy={dy + 4} rx={8} ry={2.2} fill="rgba(0,0,0,0.18)" />
+      {/* legs */}
+      <Rect x={dx - 4 + legB} y={gy - 1} width={2.2} height={5} rx={1} fill="#6b4a34" stroke={INK} strokeWidth={1.1} />
+      <Rect x={dx + 3 + legF} y={gy - 1} width={2.2} height={5} rx={1} fill="#6b4a34" stroke={INK} strokeWidth={1.1} />
+      <Rect x={dx - 4 - legB} y={gy - 1} width={2.2} height={5} rx={1} fill="#7d5942" stroke={INK} strokeWidth={1.1} />
+      <Rect x={dx + 3 - legF} y={gy - 1} width={2.2} height={5} rx={1} fill="#7d5942" stroke={INK} strokeWidth={1.1} />
+      {/* tail */}
+      <Path d={`M ${dx - 6} ${gy - 4} q -4 -2 -3 -6`} fill="none" stroke="#7d5942" strokeWidth={2.4} strokeLinecap="round" />
+      {/* body */}
+      <Rect x={dx - 6} y={gy - 8} width={12} height={7} rx={3.2} fill="#8a6046" stroke={INK} strokeWidth={1.6} />
+      {/* head */}
+      <Circle cx={dx + 7} cy={gy - 8} r={4} fill="#8a6046" stroke={INK} strokeWidth={1.5} />
+      {/* ears */}
+      <Path d={`M ${dx + 5} ${gy - 11} q -2 -1 -1 2 q 1.4 -0.4 1 -2 z`} fill="#6b4a34" stroke={INK} strokeWidth={1} />
+      <Path d={`M ${dx + 9} ${gy - 11} q 2 -1 1 2 q -1.4 -0.4 -1 -2 z`} fill="#6b4a34" stroke={INK} strokeWidth={1} />
+      {/* snout + eye */}
+      <Circle cx={dx + 10.4} cy={gy - 7} r={1.1} fill={INK} />
+      <Circle cx={dx + 6.6} cy={gy - 9} r={0.9} fill={INK} />
+    </G>
+  );
+}
+
 // World distance we invalidate the tile cache at (pin movement between rebuilds).
 const CHUNK = 6;
 
@@ -320,7 +362,10 @@ export default function RouteMap({ hike, steps, moving, blocked }) {
             />
           </G>
 
-          {/* The hiker. */}
+          {/* The hiker (and, on Walk the Dog, the dog). */}
+          {hike.id === 'walk_the_dog' && (
+            <Dog cx={cx} cy={cy} pose={Math.round(steps) % 2 === 1} blocked={blocked} />
+          )}
           <Avatar cx={cx} cy={cy} pose={Math.round(steps) % 2 === 1} blocked={blocked} />
         </Svg>
       )}
